@@ -1,0 +1,302 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # SQLite Mode (Standalone, no external DB)
+  # ============================================
+  
+  # Trading Bot - Upbit (SQLite)
+  upbit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bowman-upbit
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DB_TYPE=sqlite
+      - DB_PATH=/app/data/bowman.db
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
+      - KMS_KEY_ID=${KMS_KEY_ID}
+      - SLACK_TOKEN=${SLACK_TOKEN}
+      - SLACK_CHANNEL_ID=${SLACK_CHANNEL_ID}
+    command: ["python", "-m", "src.main", "--exchange", "upbit"]
+    volumes:
+      - bowman_data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - sqlite
+
+  # Trading Bot - Binance (SQLite)
+  binance:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bowman-binance
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DB_TYPE=sqlite
+      - DB_PATH=/app/data/bowman.db
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
+      - KMS_KEY_ID=${KMS_KEY_ID}
+      - SLACK_TOKEN=${SLACK_TOKEN}
+      - SLACK_CHANNEL_ID=${SLACK_CHANNEL_ID}
+    command: ["python", "-m", "src.main", "--exchange", "binance"]
+    volumes:
+      - bowman_data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - sqlite
+      - sqlite-binance
+
+  # Trading Bot - Korbit (SQLite)
+  korbit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bowman-korbit
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DB_TYPE=sqlite
+      - DB_PATH=/app/data/bowman.db
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
+      - KMS_KEY_ID=${KMS_KEY_ID}
+      - SLACK_TOKEN=${SLACK_TOKEN}
+      - SLACK_CHANNEL_ID=${SLACK_CHANNEL_ID}
+    command: ["python", "-m", "src.main", "--exchange", "korbit"]
+    volumes:
+      - bowman_data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - sqlite
+      - sqlite-korbit
+
+  # Trading Bot - Bithumb (SQLite)
+  bithumb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bowman-bithumb
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DB_TYPE=sqlite
+      - DB_PATH=/app/data/bowman.db
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
+      - KMS_KEY_ID=${KMS_KEY_ID}
+      - SLACK_TOKEN=${SLACK_TOKEN}
+      - SLACK_CHANNEL_ID=${SLACK_CHANNEL_ID}
+    command: ["python", "-m", "src.main", "--exchange", "bithumb"]
+    volumes:
+      - bowman_data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - sqlite
+      - sqlite-bithumb
+
+  # ============================================
+  # PostgreSQL Mode (For production/multi-user)
+  # ============================================
+  
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: bowman-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-bowmandb}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-bowmandb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - bowman-network
+    profiles:
+      - postgres
+
+  # Trading Bot - Upbit (PostgreSQL)
+  bot-upbit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bowman-upbit-pg
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DB_TYPE=postgresql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-bowmandb}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
+      - KMS_KEY_ID=${KMS_KEY_ID}
+      - SLACK_TOKEN=${SLACK_TOKEN}
+      - SLACK_CHANNEL_ID=${SLACK_CHANNEL_ID}
+    command: ["python", "-m", "src.main", "--exchange", "upbit"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - bowman-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - postgres
+
+  # Trading Bot - Binance (PostgreSQL)
+  bot-binance:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bowman-binance-pg
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DB_TYPE=postgresql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-bowmandb}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
+      - KMS_KEY_ID=${KMS_KEY_ID}
+      - SLACK_TOKEN=${SLACK_TOKEN}
+      - SLACK_CHANNEL_ID=${SLACK_CHANNEL_ID}
+    command: ["python", "-m", "src.main", "--exchange", "binance"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - bowman-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - postgres
+      - postgres-binance
+
+  # Trading Bot - Korbit (PostgreSQL)
+  bot-korbit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bowman-korbit-pg
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DB_TYPE=postgresql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-bowmandb}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
+      - KMS_KEY_ID=${KMS_KEY_ID}
+      - SLACK_TOKEN=${SLACK_TOKEN}
+      - SLACK_CHANNEL_ID=${SLACK_CHANNEL_ID}
+    command: ["python", "-m", "src.main", "--exchange", "korbit"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - bowman-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - postgres
+      - postgres-korbit
+
+  # Trading Bot - Bithumb (PostgreSQL)
+  bot-bithumb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bowman-bithumb-pg
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DB_TYPE=postgresql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-bowmandb}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
+      - KMS_KEY_ID=${KMS_KEY_ID}
+      - SLACK_TOKEN=${SLACK_TOKEN}
+      - SLACK_CHANNEL_ID=${SLACK_CHANNEL_ID}
+    command: ["python", "-m", "src.main", "--exchange", "bithumb"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - bowman-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles:
+      - postgres
+      - postgres-bithumb
+
+volumes:
+  postgres_data:
+    driver: local
+  bowman_data:
+    driver: local
+
+networks:
+  bowman-network:
+    driver: bridge
