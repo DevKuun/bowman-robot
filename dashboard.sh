@@ -27,7 +27,7 @@ start() {
     cd "$SCRIPT_DIR"
     
     # Start API server in background
-    nohup python -m src.api.run --port "$PORT" > "$LOG_FILE" 2>&1 &
+    nohup python3 -m src.api.run --port "$PORT" > "$LOG_FILE" 2>&1 &
     PID=$!
     echo $PID > "$PID_FILE"
     
