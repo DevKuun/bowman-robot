@@ -26,8 +26,15 @@ start() {
     echo "Starting Bowman Dashboard API server..."
     cd "$SCRIPT_DIR"
     
-    # Activate virtual environment if exists
-    if [ -d "$SCRIPT_DIR/venv" ]; then
+    # Activate virtual environment (create if not exists)
+    if [ ! -d "$SCRIPT_DIR/venv" ]; then
+        echo "Creating virtual environment..."
+        python3 -m venv "$SCRIPT_DIR/venv"
+        source "$SCRIPT_DIR/venv/bin/activate"
+        echo "Installing dependencies..."
+        pip install --upgrade pip > /dev/null 2>&1
+        pip install -r "$SCRIPT_DIR/requirements.txt" > /dev/null 2>&1
+    else
         source "$SCRIPT_DIR/venv/bin/activate"
     fi
     
