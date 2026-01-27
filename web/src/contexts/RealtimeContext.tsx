@@ -2,20 +2,18 @@ import { createContext, useContext, useEffect, useState, useRef, useCallback, ty
 import type { BotStatus, Portfolio, Trade, LogEntry, PnLDataPoint, TradeSummary, PortfolioSummary } from '../types';
 
 // Get WebSocket URL from current host
-const getWsUrl = () => {
-  if (import.meta.env.VITE_WS_URL) {
-    return import.meta.env.VITE_WS_URL;
+const getWsUrl = (): string => {
+  if (typeof window === 'undefined') {
+    return 'ws://localhost:8002';
   }
-  if (typeof window !== 'undefined') {
-    const { hostname, port } = window.location;
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // If running from Vite dev server (5173), use API server (8002)
-    if (port === '5173') {
-      return `${wsProtocol}//${hostname}:8002`;
-    }
-    return port ? `${wsProtocol}//${hostname}:${port}` : `${wsProtocol}//${hostname}`;
+  const { protocol, hostname, port } = window.location;
+  const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
+  // For Vite dev server, redirect to API port
+  if (port === '5173') {
+    return `${wsProtocol}//${hostname}:8002`;
   }
-  return 'ws://localhost:8002';
+  // Use same host:port as current page
+  return port ? `${wsProtocol}//${hostname}:${port}` : `${wsProtocol}//${hostname}`;
 };
 
 interface RealtimeState {

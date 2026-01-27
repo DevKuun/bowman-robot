@@ -4,31 +4,14 @@ import type {
   Account, TradeSummary, PortfolioSummary 
 } from '../types';
 
-// Use same host as the web app, or fall back to localhost:8002
-const getApiBase = () => {
-  // If env var is set, use it
-  if (import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL;
+// Use same origin - API is served from the same server
+const getApiBase = (): string => {
+  // For Vite dev server, redirect to API port
+  if (typeof window !== 'undefined' && window.location.port === '5173') {
+    return `${window.location.protocol}//${window.location.hostname}:8002`;
   }
-  
-  // In browser, determine API URL
-  if (typeof window !== 'undefined') {
-    const { protocol, hostname, port } = window.location;
-    
-    // If running from Vite dev server (5173), use API server (8002)
-    if (port === '5173') {
-      return `${protocol}//${hostname}:8002`;
-    }
-    
-    // Otherwise use same origin (served from API server)
-    if (port) {
-      return `${protocol}//${hostname}:${port}`;
-    }
-    return `${protocol}//${hostname}`;
-  }
-  
-  // Default fallback
-  return 'http://localhost:8002';
+  // Use same origin (empty string = relative URLs)
+  return '';
 };
 
 const API_BASE = getApiBase();
