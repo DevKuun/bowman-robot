@@ -160,6 +160,8 @@ export interface PnLSnapshot {
   total_value: number;
   pnl: number;
   pnl_percent: number;
+  btc_return?: number | null;
+  eth_return?: number | null;
 }
 
 export interface SessionDetail {

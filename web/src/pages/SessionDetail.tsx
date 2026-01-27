@@ -85,6 +85,8 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps) {
     total_value: p.total_value,
     pnl: p.pnl,
     pnl_percent: p.pnl_percent,
+    btc_return: p.btc_return ?? undefined,
+    eth_return: p.eth_return ?? undefined,
   }));
   
   // Calculate duration
@@ -187,7 +189,12 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps) {
               <span className="stat-label">거래량</span>
             </div>
             <span className="text-lg font-bold text-gray-800 tabular-nums">
-              {formatNumber(summary.total_volume / 1000000, { maximumFractionDigits: 1 })}M
+              {(() => {
+                const vol = summary.total_volume;
+                if (vol >= 1000000) return `${formatNumber(vol / 1000000, { maximumFractionDigits: 1 })}M`;
+                if (vol >= 1000) return `${formatNumber(vol / 1000, { maximumFractionDigits: 1 })}K`;
+                return formatNumber(vol, { maximumFractionDigits: 0 });
+              })()}
             </span>
           </div>
         </div>

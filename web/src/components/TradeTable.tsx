@@ -105,7 +105,9 @@ export function TradeTable({ trades, isLoading }: TradeTableProps) {
                     {formatNumber(typeof trade.value === 'number' ? trade.value : parseFloat(trade.value || '0'), { maximumFractionDigits: 0 })}
                   </td>
                   <td className="py-3 px-3 text-right text-sm text-purple-600 tabular-nums">
-                    {formatNumber(fee, { maximumFractionDigits: 0 })}
+                    {fee < 1 && fee > 0 
+                      ? fee.toFixed(4)
+                      : formatNumber(fee, { maximumFractionDigits: 2 })}
                   </td>
                   <td className={`py-3 px-6 text-right text-sm tabular-nums ${
                     slippage > 0.1 ? 'text-amber-600' : 'text-gray-400'
