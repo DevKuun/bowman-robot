@@ -171,7 +171,9 @@ class TradingScheduler:
             if worker.target_weights:
                 for currency in worker.target_weights.keys():
                     if self.exchange_type == ExchangeType.UPBIT:
-                        all_symbols.add(f"KRW-{currency}")
+                        # Add symbols for all enabled markets
+                        for market in settings.upbit_markets:
+                            all_symbols.add(f"{market}-{currency}")
                     elif self.exchange_type == ExchangeType.BINANCE:
                         all_symbols.add(f"{currency}USDT")
                     elif self.exchange_type == ExchangeType.BITHUMB:
@@ -185,9 +187,16 @@ class TradingScheduler:
         # Calculate minimum trade amounts
         min_trades = {}
         if self.exchange_type == ExchangeType.UPBIT:
-            # Upbit: KRW market only
+            # Upbit: Multiple markets (KRW, BTC, USDT)
             for symbol in all_symbols:
-                min_trades[symbol] = settings.upbit_min_trade_krw
+                if symbol.startswith('KRW-'):
+                    min_trades[symbol] = settings.upbit_min_trade_krw
+                elif symbol.startswith('BTC-'):
+                    min_trades[symbol] = settings.upbit_min_trade_btc
+                elif symbol.startswith('USDT-'):
+                    min_trades[symbol] = settings.upbit_min_trade_usdt
+                else:
+                    min_trades[symbol] = settings.upbit_min_trade_krw
         elif self.exchange_type == ExchangeType.BITHUMB:
             # Bithumb: KRW market only
             for symbol in all_symbols:
@@ -532,15 +541,26 @@ class PaperTradingScheduler:
                 current_values[currency] = bal.available
                 total_value += bal.available
             else:
-                # Find price
+                # Find price - try multiple markets for Upbit
+                symbol = None
+                price = None
+                
                 if self.exchange_type == ExchangeType.UPBIT:
-                    symbol = f"KRW-{currency}"
+                    # Try markets in priority order
+                    for market in ['KRW', 'USDT', 'BTC']:
+                        if market in settings.upbit_markets:
+                            test_symbol = f"{market}-{currency}"
+                            if test_symbol in prices:
+                                symbol = test_symbol
+                                price = prices[test_symbol]
+                                break
                 elif self.exchange_type == ExchangeType.BITHUMB:
                     symbol = f"{currency}_KRW"
+                    price = prices.get(symbol)
                 else:
                     symbol = f"{currency}USDT"
+                    price = prices.get(symbol)
                 
-                price = prices.get(symbol)
                 if price:
                     value = bal.available * price
                     current_values[currency] = value
@@ -565,16 +585,27 @@ class PaperTradingScheduler:
             if abs(diff) < th_trd_rate:
                 continue
             
-            # Find symbol and price
+            # Find symbol and price - try multiple markets for Upbit
+            symbol = None
+            price = None
+            
             if self.exchange_type == ExchangeType.UPBIT:
-                symbol = f"KRW-{currency}"
+                # Try markets in priority order
+                for market in ['KRW', 'USDT', 'BTC']:
+                    if market in settings.upbit_markets:
+                        test_symbol = f"{market}-{currency}"
+                        if test_symbol in prices:
+                            symbol = test_symbol
+                            price = prices[test_symbol]
+                            break
             elif self.exchange_type == ExchangeType.BITHUMB:
                 symbol = f"{currency}_KRW"
+                price = prices.get(symbol)
             else:
                 symbol = f"{currency}USDT"
+                price = prices.get(symbol)
             
-            price = prices.get(symbol)
-            if not price or price <= 0:
+            if not symbol or not price or price <= 0:
                 continue
             
             # Calculate trade amount
@@ -582,10 +613,18 @@ class PaperTradingScheduler:
             quantity = trade_value / price
             
             # Minimum trade check using settings
-            if quote_currency == 'KRW':
-                if self.exchange_type == ExchangeType.UPBIT:
+            # Determine market from symbol
+            if self.exchange_type == ExchangeType.UPBIT and symbol:
+                if symbol.startswith('KRW-'):
                     min_trade = Decimal(str(settings.upbit_min_trade_krw))
-                elif self.exchange_type == ExchangeType.BITHUMB:
+                elif symbol.startswith('BTC-'):
+                    min_trade = Decimal(str(settings.upbit_min_trade_btc))
+                elif symbol.startswith('USDT-'):
+                    min_trade = Decimal(str(settings.upbit_min_trade_usdt))
+                else:
+                    min_trade = Decimal(str(settings.upbit_min_trade_krw))
+            elif quote_currency == 'KRW':
+                if self.exchange_type == ExchangeType.BITHUMB:
                     min_trade = Decimal(str(settings.bithumb_min_trade_krw))
                 elif self.exchange_type == ExchangeType.KORBIT:
                     min_trade = Decimal(str(settings.korbit_min_trade_krw))

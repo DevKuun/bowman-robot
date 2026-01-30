@@ -418,10 +418,28 @@ class TradingEngine:
     def _find_trading_symbol(
         self,
         currency: str,
-        exchange: ExchangeType
+        exchange: ExchangeType,
+        available_symbols: Optional[set] = None
     ) -> Optional[str]:
-        """Find the trading symbol for a currency."""
+        """
+        Find the trading symbol for a currency.
+        
+        For Upbit, tries multiple markets in priority order:
+        KRW > USDT > BTC (if enabled in settings).
+        """
         if exchange == ExchangeType.UPBIT:
+            # Try markets in priority order
+            from src.config.settings import settings
+            market_priority = ['KRW', 'USDT', 'BTC']
+            
+            for market in market_priority:
+                if market not in settings.upbit_markets:
+                    continue
+                symbol = f"{market}-{currency}"
+                if available_symbols is None or symbol in available_symbols:
+                    return symbol
+            
+            # Fallback to KRW if nothing found
             return f"KRW-{currency}"
         elif exchange == ExchangeType.BINANCE:
             return f"{currency}USDT"

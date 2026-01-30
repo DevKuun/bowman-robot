@@ -29,13 +29,61 @@ class UpbitExchange(BaseExchange):
     Upbit exchange adapter.
     
     Implements the BaseExchange interface for Upbit API.
+    Supports multiple markets: KRW, BTC, USDT.
     """
     
     BASE_URL = "https://api.upbit.com/v1"
     
+    # Market priority for trading (prefer lower fee markets)
+    MARKET_PRIORITY = ['KRW', 'USDT', 'BTC']
+    
+    # Fee rates by market
+    MARKET_FEES = {
+        'KRW': 0.0005,   # 0.05%
+        'BTC': 0.0025,   # 0.25%
+        'USDT': 0.0025,  # 0.25%
+    }
+    
     def __init__(self, access_key: str, secret_key: str):
         super().__init__(access_key, secret_key)
         self._trading_pairs_cache = None
+    
+    def get_symbol(self, base_currency: str, quote_currency: str) -> str:
+        """Generate Upbit symbol from base and quote currencies."""
+        return f"{quote_currency}-{base_currency}"
+    
+    def parse_symbol(self, symbol: str) -> tuple[str, str]:
+        """Parse Upbit symbol into (base_currency, quote_currency)."""
+        parts = symbol.split('-')
+        if len(parts) != 2:
+            raise ValueError(f"Invalid Upbit symbol: {symbol}")
+        return parts[1], parts[0]  # base, quote
+    
+    def get_trading_pairs_by_market(self, quote_currency: str) -> List[TradingPair]:
+        """Get trading pairs for a specific market."""
+        all_pairs = self.get_trading_pairs()
+        return [p for p in all_pairs if p.quote_currency == quote_currency]
+    
+    def get_best_market_for_currency(self, base_currency: str) -> Optional[str]:
+        """
+        Find the best market for a currency based on priority.
+        Returns the quote currency of the best available market.
+        """
+        all_pairs = self.get_trading_pairs()
+        available_markets = {
+            p.quote_currency for p in all_pairs 
+            if p.base_currency == base_currency
+        }
+        
+        # Return first available market based on priority
+        for market in self.MARKET_PRIORITY:
+            if market in available_markets and market in settings.upbit_markets:
+                return market
+        return None
+    
+    def get_fee_rate(self, quote_currency: str) -> float:
+        """Get fee rate for a specific market."""
+        return self.MARKET_FEES.get(quote_currency, 0.0025)
     
     @property
     def exchange_type(self) -> ExchangeType:
@@ -43,8 +91,8 @@ class UpbitExchange(BaseExchange):
     
     @property
     def quote_currencies(self) -> List[str]:
-        # Only use KRW market for better liquidity and lower fees (0.05% vs 0.25%)
-        return ['KRW']
+        """Get enabled quote currencies from settings."""
+        return settings.upbit_markets
     
     def _generate_token(self, query_params: Optional[Dict] = None) -> str:
         """Generate JWT token for authentication."""

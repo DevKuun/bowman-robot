@@ -78,6 +78,16 @@ class Settings(BaseSettings):
     upbit_min_trade_btc: float = Field(default=0.00005, description="Minimum trade amount in BTC")
     upbit_min_trade_usdt: float = Field(default=0.5, description="Minimum trade amount in USDT")
     
+    # Upbit multi-market settings
+    upbit_markets: List[str] = Field(
+        default=["KRW"],
+        description="Upbit markets to include: KRW, BTC, USDT"
+    )
+    upbit_primary_market: str = Field(
+        default="KRW",
+        description="Primary market for portfolio valuation"
+    )
+    
     binance_fee_discount: float = Field(default=0.25, description="Binance BNB fee discount")
     binance_referral_kickback: float = Field(default=0.2, description="Binance referral kickback")
     
