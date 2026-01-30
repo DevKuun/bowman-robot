@@ -384,6 +384,9 @@ class PaperTradingScheduler:
         self.last_ref_price_update = datetime.min
         self.last_snapshot = datetime.min
         
+        # Cross rates for multi-market price comparison
+        self._cross_rates: Dict[str, Decimal] = {}
+        
         # Statistics
         self.iteration_count = 0
         self.start_time = datetime.utcnow()
@@ -521,6 +524,12 @@ class PaperTradingScheduler:
         try:
             tickers = self.paper_exchange.get_all_tickers()
             prices = {k: v.price for k, v in tickers.items()}
+            
+            # Calculate cross rates for multi-market price comparison (Upbit)
+            if self.exchange_type == ExchangeType.UPBIT:
+                self._cross_rates = self.real_exchange._calculate_cross_rates(prices)
+            else:
+                self._cross_rates = {}
         except Exception as e:
             logger.error(f"Failed to get prices: {e}")
             return
@@ -585,25 +594,41 @@ class PaperTradingScheduler:
             if abs(diff) < th_trd_rate:
                 continue
             
-            # Find symbol and price - try multiple markets for Upbit
+            # Find symbol and price - find best market by effective price for Upbit
             symbol = None
             price = None
+            selected_market = None
             
             if self.exchange_type == ExchangeType.UPBIT:
-                # Try markets in priority order
-                for market in ['KRW', 'USDT', 'BTC']:
-                    if market in settings.upbit_markets:
-                        test_symbol = f"{market}-{currency}"
-                        if test_symbol in prices:
-                            symbol = test_symbol
-                            price = prices[test_symbol]
-                            break
+                # Use price comparison to find best market (including fees)
+                side_str = 'buy' if diff > 0 else 'sell'
+                best_result = self.real_exchange.find_best_market_by_price(
+                    base_currency=currency,
+                    side=side_str,
+                    prices=prices,
+                    cross_rates=self._cross_rates
+                )
+                
+                if best_result:
+                    symbol, effective_price, selected_market = best_result
+                    price = prices.get(symbol)
+                    
+                    # Log market selection if not using default KRW
+                    if selected_market != 'KRW' and self.iteration_count % 60 == 1:
+                        comparison = self.real_exchange.compare_market_prices(currency, prices, self._cross_rates)
+                        if len(comparison) > 1:
+                            logger.info(f"[Market Selection] {currency} {side_str}: chose {selected_market} market")
+                            for mkt, info in comparison.items():
+                                eff_key = 'buy_effective' if side_str == 'buy' else 'sell_effective'
+                                logger.info(f"  {mkt}: {info[eff_key]:.0f} KRW (fee {info['fee_rate']*100:.2f}%)")
             elif self.exchange_type == ExchangeType.BITHUMB:
                 symbol = f"{currency}_KRW"
                 price = prices.get(symbol)
+                selected_market = 'KRW'
             else:
                 symbol = f"{currency}USDT"
                 price = prices.get(symbol)
+                selected_market = 'USDT'
             
             if not symbol or not price or price <= 0:
                 continue

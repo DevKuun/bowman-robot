@@ -85,6 +85,145 @@ class UpbitExchange(BaseExchange):
         """Get fee rate for a specific market."""
         return self.MARKET_FEES.get(quote_currency, 0.0025)
     
+    def find_best_market_by_price(
+        self,
+        base_currency: str,
+        side: str,  # 'buy' or 'sell'
+        prices: Dict[str, Decimal],
+        cross_rates: Optional[Dict[str, Decimal]] = None
+    ) -> Optional[tuple[str, Decimal, str]]:
+        """
+        Find the best market for a currency based on effective price (including fees).
+        
+        For buying: find the market with the LOWEST effective price
+        For selling: find the market with the HIGHEST effective price
+        
+        Args:
+            base_currency: Currency to trade (e.g., 'ETH')
+            side: 'buy' or 'sell'
+            prices: Dict of symbol -> price (e.g., {'KRW-ETH': 5000000, 'BTC-ETH': 0.05})
+            cross_rates: Dict of quote currency -> KRW rate (e.g., {'BTC': 150000000, 'USDT': 1450})
+                         If None, will be calculated from prices
+        
+        Returns:
+            Tuple of (best_symbol, effective_price_in_krw, quote_currency) or None
+        """
+        if cross_rates is None:
+            cross_rates = self._calculate_cross_rates(prices)
+        
+        best_market = None
+        best_effective_price = None
+        best_quote = None
+        
+        for market in settings.upbit_markets:
+            symbol = f"{market}-{base_currency}"
+            
+            if symbol not in prices:
+                continue
+            
+            price = prices[symbol]
+            fee_rate = Decimal(str(self.get_fee_rate(market)))
+            
+            # Convert price to KRW for comparison
+            if market == 'KRW':
+                price_in_krw = price
+            elif market in cross_rates and cross_rates[market] > 0:
+                price_in_krw = price * cross_rates[market]
+            else:
+                continue  # Cannot convert, skip this market
+            
+            # Calculate effective price including fees
+            if side == 'buy':
+                # When buying, we pay price * (1 + fee)
+                effective_price = price_in_krw * (1 + fee_rate)
+            else:
+                # When selling, we receive price * (1 - fee)
+                effective_price = price_in_krw * (1 - fee_rate)
+            
+            # Compare and find best
+            if best_effective_price is None:
+                best_market = symbol
+                best_effective_price = effective_price
+                best_quote = market
+            elif side == 'buy' and effective_price < best_effective_price:
+                # For buying, lower is better
+                best_market = symbol
+                best_effective_price = effective_price
+                best_quote = market
+            elif side == 'sell' and effective_price > best_effective_price:
+                # For selling, higher is better
+                best_market = symbol
+                best_effective_price = effective_price
+                best_quote = market
+        
+        if best_market:
+            return (best_market, best_effective_price, best_quote)
+        return None
+    
+    def _calculate_cross_rates(self, prices: Dict[str, Decimal]) -> Dict[str, Decimal]:
+        """
+        Calculate cross rates to convert BTC/USDT prices to KRW.
+        
+        Returns:
+            Dict mapping quote currency to KRW rate
+        """
+        cross_rates = {'KRW': Decimal('1')}
+        
+        # BTC/KRW rate
+        if 'KRW-BTC' in prices:
+            cross_rates['BTC'] = prices['KRW-BTC']
+        
+        # USDT/KRW rate
+        if 'KRW-USDT' in prices:
+            cross_rates['USDT'] = prices['KRW-USDT']
+        
+        return cross_rates
+    
+    def compare_market_prices(
+        self,
+        base_currency: str,
+        prices: Dict[str, Decimal],
+        cross_rates: Optional[Dict[str, Decimal]] = None
+    ) -> Dict[str, Dict]:
+        """
+        Compare prices across all markets for a currency.
+        
+        Returns:
+            Dict with market comparison info for logging/debugging
+        """
+        if cross_rates is None:
+            cross_rates = self._calculate_cross_rates(prices)
+        
+        comparison = {}
+        
+        for market in settings.upbit_markets:
+            symbol = f"{market}-{base_currency}"
+            
+            if symbol not in prices:
+                continue
+            
+            price = prices[symbol]
+            fee_rate = Decimal(str(self.get_fee_rate(market)))
+            
+            # Convert to KRW
+            if market == 'KRW':
+                price_in_krw = price
+            elif market in cross_rates and cross_rates[market] > 0:
+                price_in_krw = price * cross_rates[market]
+            else:
+                continue
+            
+            comparison[market] = {
+                'symbol': symbol,
+                'raw_price': price,
+                'price_in_krw': price_in_krw,
+                'fee_rate': fee_rate,
+                'buy_effective': price_in_krw * (1 + fee_rate),
+                'sell_effective': price_in_krw * (1 - fee_rate),
+            }
+        
+        return comparison
+    
     @property
     def exchange_type(self) -> ExchangeType:
         return ExchangeType.UPBIT
