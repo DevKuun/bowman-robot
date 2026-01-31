@@ -98,6 +98,10 @@ class UpbitExchange(BaseExchange):
         For buying: find the market with the LOWEST effective price
         For selling: find the market with the HIGHEST effective price
         
+        IMPORTANT: For BTC/USDT markets, considers 2-step fees:
+        - Sell: Coin → BTC/USDT (fee) → KRW (fee)
+        - Buy: KRW → BTC/USDT (fee) → Coin (fee)
+        
         Args:
             base_currency: Currency to trade (e.g., 'ETH')
             side: 'buy' or 'sell'
@@ -114,6 +118,8 @@ class UpbitExchange(BaseExchange):
         best_market = None
         best_effective_price = None
         best_quote = None
+        
+        krw_fee_rate = Decimal(str(self.get_fee_rate('KRW')))  # 0.05%
         
         for market in settings.upbit_markets:
             symbol = f"{market}-{base_currency}"
@@ -133,12 +139,23 @@ class UpbitExchange(BaseExchange):
                 continue  # Cannot convert, skip this market
             
             # Calculate effective price including fees
+            # For BTC/USDT markets, must consider 2-step conversion fees
             if side == 'buy':
-                # When buying, we pay price * (1 + fee)
-                effective_price = price_in_krw * (1 + fee_rate)
-            else:
-                # When selling, we receive price * (1 - fee)
-                effective_price = price_in_krw * (1 - fee_rate)
+                if market == 'KRW':
+                    # Direct: KRW → Coin (1 fee)
+                    effective_price = price_in_krw * (1 + fee_rate)
+                else:
+                    # 2-step: KRW → BTC/USDT (fee) → Coin (fee)
+                    # Total cost = price_in_krw * (1 + krw_fee) * (1 + market_fee)
+                    effective_price = price_in_krw * (1 + krw_fee_rate) * (1 + fee_rate)
+            else:  # sell
+                if market == 'KRW':
+                    # Direct: Coin → KRW (1 fee)
+                    effective_price = price_in_krw * (1 - fee_rate)
+                else:
+                    # 2-step: Coin → BTC/USDT (fee) → KRW (fee)
+                    # Total received = price_in_krw * (1 - market_fee) * (1 - krw_fee)
+                    effective_price = price_in_krw * (1 - fee_rate) * (1 - krw_fee_rate)
             
             # Compare and find best
             if best_effective_price is None:

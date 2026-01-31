@@ -676,16 +676,47 @@ class PaperTradingScheduler:
             # Determine side and check available balance
             if diff > 0:
                 side = OrderSide.BUY
-                # Check KRW/USDT balance for buy
-                available_quote = balance.balances.get(quote_currency)
-                if available_quote:
-                    max_buy_value = available_quote.available * Decimal('0.95')  # Keep 5% reserve
-                    if trade_value > max_buy_value:
-                        trade_value = max_buy_value
-                        quantity = trade_value / price_in_krw
-                    if trade_value < min_trade:
+                
+                # For Upbit: Check the selected market's quote currency balance
+                # If not available, fallback to KRW market
+                if self.exchange_type == ExchangeType.UPBIT and selected_market:
+                    required_quote = selected_market  # BTC, USDT, or KRW
+                    available_quote = balance.balances.get(required_quote)
+                    
+                    # Fallback to KRW if selected market's balance is insufficient
+                    if (not available_quote or available_quote.available <= 0) and required_quote != 'KRW':
+                        # Try KRW market instead
+                        krw_symbol = f"KRW-{currency}"
+                        if krw_symbol in prices:
+                            logger.debug(f"[Fallback] {currency}: No {required_quote} balance, using KRW market")
+                            symbol = krw_symbol
+                            price = prices[symbol]
+                            price_in_krw = price
+                            selected_market = 'KRW'
+                            available_quote = balance.balances.get('KRW')
+                            min_trade = Decimal(str(settings.upbit_min_trade_krw))
+                    
+                    if not available_quote or available_quote.available <= 0:
                         continue
+                    
+                    # Calculate max buy value in KRW terms
+                    if selected_market == 'KRW':
+                        max_buy_value = available_quote.available * Decimal('0.95')
+                    else:
+                        # Convert BTC/USDT balance to KRW for comparison
+                        cross_rate = self._cross_rates.get(selected_market, Decimal('1'))
+                        max_buy_value = available_quote.available * cross_rate * Decimal('0.95')
                 else:
+                    # Non-Upbit exchanges: use default quote_currency
+                    available_quote = balance.balances.get(quote_currency)
+                    if not available_quote:
+                        continue
+                    max_buy_value = available_quote.available * Decimal('0.95')
+                
+                if trade_value > max_buy_value:
+                    trade_value = max_buy_value
+                    quantity = trade_value / price_in_krw
+                if trade_value < min_trade:
                     continue
             else:
                 side = OrderSide.SELL
