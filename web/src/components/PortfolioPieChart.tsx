@@ -29,26 +29,23 @@ export function PortfolioPieChart({ holdings, isLoading, embedded = false, quote
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [animationProgress, setAnimationProgress] = useState(0);
   const animationRef = useRef<number | null>(null);
-  const prevHoldingsKey = useRef<string>('');
+  const hasAnimated = useRef(false);
 
-  // Animate donut drawing
+  // Animate donut drawing only on first load with data
   useEffect(() => {
-    const holdingsKey = holdings.map(h => `${h.currency}:${h.value}`).join(',');
+    // Only animate once when holdings first become available
+    if (hasAnimated.current || !holdings || holdings.length === 0) return;
+    hasAnimated.current = true;
     
-    // Only animate when holdings actually change
-    if (holdingsKey === prevHoldingsKey.current) return;
-    prevHoldingsKey.current = holdingsKey;
-    
-    // Reset and start animation
-    setAnimationProgress(0);
+    // Start animation
     const startTime = performance.now();
-    const duration = 800; // ms
+    const duration = 1200; // ms (slower animation)
     
     const animate = (currentTime: number) => {
       const elapsed = currentTime - startTime;
       const progress = Math.min(elapsed / duration, 1);
       
-      // Easing function (ease-out)
+      // Easing function (ease-out cubic)
       const eased = 1 - Math.pow(1 - progress, 3);
       setAnimationProgress(eased);
       
@@ -65,6 +62,16 @@ export function PortfolioPieChart({ holdings, isLoading, embedded = false, quote
       }
     };
   }, [holdings]);
+
+  // If already animated, show full chart immediately
+  useEffect(() => {
+    if (hasAnimated.current && animationProgress === 1) {
+      // Keep at 1 for subsequent renders
+    } else if (hasAnimated.current && holdings.length > 0 && animationProgress === 0) {
+      // Data changed after initial animation, show immediately
+      setAnimationProgress(1);
+    }
+  }, [holdings, animationProgress]);
 
   const { chartData, totalValue } = useMemo(() => {
     if (!holdings || holdings.length === 0) {
