@@ -313,10 +313,22 @@ class PaperTradingAccount:
         logger.info(f"Paper trading account initialized ({mode} mode): {self.balances}")
     
     def _get_quote_currency(self) -> str:
-        """Get the quote currency for this exchange."""
+        """Get the default quote currency for this exchange."""
         if self.exchange_type in [ExchangeType.UPBIT, ExchangeType.KORBIT, ExchangeType.BITHUMB]:
             return "KRW"
         return "USDT"
+    
+    def _get_quote_currency_from_symbol(self, symbol: str) -> str:
+        """Extract quote currency from symbol."""
+        if '-' in symbol:  # Upbit: KRW-BTC, BTC-ETH, USDT-BTC
+            return symbol.split('-')[0]
+        elif '_' in symbol:  # Korbit/Bithumb: btc_krw
+            return symbol.split('_')[1].upper()
+        else:  # Binance: BTCUSDT
+            for quote in ['USDT', 'BTC', 'ETH']:
+                if symbol.endswith(quote):
+                    return quote
+        return self._get_quote_currency()
     
     def _get_base_currency(self, symbol: str) -> str:
         """Extract base currency from symbol."""
@@ -366,7 +378,7 @@ class PaperTradingAccount:
             Simulated order result
         """
         base_currency = self._get_base_currency(symbol)
-        quote_currency = self._get_quote_currency()
+        quote_currency = self._get_quote_currency_from_symbol(symbol)
         
         value = quantity * price
         fee = value * self.fee_rate
@@ -446,7 +458,7 @@ class PaperTradingAccount:
             Simulated order result (may be partially filled)
         """
         base_currency = self._get_base_currency(symbol)
-        quote_currency = self._get_quote_currency()
+        quote_currency = self._get_quote_currency_from_symbol(symbol)
         
         # Calculate realistic execution
         result = self.executor.calculate_execution(order_book, side, quantity)
@@ -560,28 +572,47 @@ class PaperTradingAccount:
         )
     
     def calculate_portfolio_value(self, prices: Dict[str, Decimal] = None) -> Decimal:
-        """Calculate total portfolio value in quote currency."""
+        """Calculate total portfolio value in primary quote currency (KRW for Korean exchanges)."""
         if prices:
             self.update_prices(prices)
         
         quote_currency = self._get_quote_currency()
         total = self.balances.get(quote_currency, Decimal("0"))
         
+        # Get cross rates for multi-market support (Upbit)
+        cross_rates = {}
+        if self.exchange_type == ExchangeType.UPBIT:
+            if 'KRW-BTC' in self.current_prices:
+                cross_rates['BTC'] = self.current_prices['KRW-BTC']
+            if 'KRW-USDT' in self.current_prices:
+                cross_rates['USDT'] = self.current_prices['KRW-USDT']
+        
         for currency, amount in self.balances.items():
             if currency == quote_currency:
                 continue
             
-            # Find price for this currency
-            price = None
-            if self.exchange_type == ExchangeType.UPBIT:
-                price = self.current_prices.get(f"KRW-{currency}")
-            elif self.exchange_type == ExchangeType.BITHUMB:
-                price = self.current_prices.get(f"{currency}_KRW")
-            elif self.exchange_type == ExchangeType.BINANCE:
-                price = self.current_prices.get(f"{currency}USDT")
+            # Find price for this currency (convert to primary quote currency)
+            price_in_quote = None
             
-            if price:
-                total += amount * price
+            if self.exchange_type == ExchangeType.UPBIT:
+                # Try KRW market first
+                if f"KRW-{currency}" in self.current_prices:
+                    price_in_quote = self.current_prices[f"KRW-{currency}"]
+                # Try USDT market and convert to KRW
+                elif f"USDT-{currency}" in self.current_prices and 'USDT' in cross_rates:
+                    usdt_price = self.current_prices[f"USDT-{currency}"]
+                    price_in_quote = usdt_price * cross_rates['USDT']
+                # Try BTC market and convert to KRW
+                elif f"BTC-{currency}" in self.current_prices and 'BTC' in cross_rates:
+                    btc_price = self.current_prices[f"BTC-{currency}"]
+                    price_in_quote = btc_price * cross_rates['BTC']
+            elif self.exchange_type == ExchangeType.BITHUMB:
+                price_in_quote = self.current_prices.get(f"{currency}_KRW")
+            elif self.exchange_type == ExchangeType.BINANCE:
+                price_in_quote = self.current_prices.get(f"{currency}USDT")
+            
+            if price_in_quote:
+                total += amount * price_in_quote
         
         return total
     

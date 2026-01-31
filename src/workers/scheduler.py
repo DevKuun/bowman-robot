@@ -613,6 +613,14 @@ class PaperTradingScheduler:
                     symbol, effective_price, selected_market = best_result
                     price = prices.get(symbol)
                     
+                    # IMPORTANT: Convert price to KRW for quantity calculation
+                    # if using BTC or USDT market
+                    price_in_krw = price
+                    if selected_market == 'BTC' and 'BTC' in self._cross_rates:
+                        price_in_krw = price * self._cross_rates['BTC']
+                    elif selected_market == 'USDT' and 'USDT' in self._cross_rates:
+                        price_in_krw = price * self._cross_rates['USDT']
+                    
                     # Log market selection if not using default KRW
                     if selected_market != 'KRW' and self.iteration_count % 60 == 1:
                         comparison = self.real_exchange.compare_market_prices(currency, prices, self._cross_rates)
@@ -624,18 +632,21 @@ class PaperTradingScheduler:
             elif self.exchange_type == ExchangeType.BITHUMB:
                 symbol = f"{currency}_KRW"
                 price = prices.get(symbol)
+                price_in_krw = price
                 selected_market = 'KRW'
             else:
                 symbol = f"{currency}USDT"
                 price = prices.get(symbol)
+                price_in_krw = price  # USDT is quote currency for Binance
                 selected_market = 'USDT'
             
             if not symbol or not price or price <= 0:
                 continue
             
-            # Calculate trade amount
+            # Calculate trade amount (trade_value is always in KRW for Korean exchanges)
             trade_value = abs(diff) * total_value
-            quantity = trade_value / price
+            # Use KRW-converted price for quantity calculation
+            quantity = trade_value / price_in_krw
             
             # Minimum trade check using settings
             # Determine market from symbol
@@ -671,7 +682,7 @@ class PaperTradingScheduler:
                     max_buy_value = available_quote.available * Decimal('0.95')  # Keep 5% reserve
                     if trade_value > max_buy_value:
                         trade_value = max_buy_value
-                        quantity = trade_value / price
+                        quantity = trade_value / price_in_krw
                     if trade_value < min_trade:
                         continue
                 else:
@@ -683,7 +694,7 @@ class PaperTradingScheduler:
                 if available_coin:
                     if quantity > available_coin.available:
                         quantity = available_coin.available * Decimal('0.95')
-                        trade_value = quantity * price
+                        trade_value = quantity * price_in_krw
                     if trade_value < min_trade:
                         continue
                 else:
