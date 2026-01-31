@@ -107,7 +107,11 @@ function PortfolioPieChartInner({ holdings, isLoading, embedded = false, quoteCu
                   />
                 ))}
               </Pie>
-              <Tooltip content={<CustomTooltip quoteCurrency={quoteCurrency} />} />
+              <Tooltip 
+                content={<CustomTooltip quoteCurrency={quoteCurrency} />}
+                position={{ x: 240, y: 80 }}
+                allowEscapeViewBox={{ x: true, y: true }}
+              />
             </PieChart>
             {/* Center Label */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
