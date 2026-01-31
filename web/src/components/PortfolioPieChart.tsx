@@ -1,39 +1,83 @@
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { useMemo, useState } from 'react';
 import type { Holding } from '../types';
 import { formatNumber } from '../utils/format';
 
 interface PortfolioPieChartProps {
   holdings: Holding[];
   isLoading: boolean;
-  embedded?: boolean;  // When true, renders without card wrapper
+  embedded?: boolean;
   quoteCurrency?: string;
 }
 
-// Diverse color palette with better contrast
+// Diverse color palette
 const COLORS = [
-  '#3b82f6', // blue
-  '#10b981', // emerald
-  '#f59e0b', // amber
-  '#ef4444', // red
-  '#8b5cf6', // violet
-  '#ec4899', // pink
-  '#06b6d4', // cyan
-  '#f97316', // orange
-  '#6366f1', // indigo
-  '#14b8a6', // teal
-  '#a855f7', // purple
-  '#84cc16', // lime
-  '#0ea5e9', // sky
-  '#e11d48', // rose
-  '#7c3aed', // violet dark
-  '#059669', // emerald dark
-  '#dc2626', // red dark
-  '#2563eb', // blue dark
-  '#ca8a04', // yellow dark
-  '#0891b2', // cyan dark
+  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+  '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
+  '#a855f7', '#84cc16', '#0ea5e9', '#e11d48', '#7c3aed',
+  '#059669', '#dc2626', '#2563eb', '#ca8a04', '#0891b2',
 ];
 
+interface ChartItem {
+  name: string;
+  value: number;
+  percent: number;
+  color: string;
+}
+
 export function PortfolioPieChart({ holdings, isLoading, embedded = false, quoteCurrency = 'KRW' }: PortfolioPieChartProps) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
+  const { chartData, totalValue, gradientStyle } = useMemo(() => {
+    if (!holdings || holdings.length === 0) {
+      return { chartData: [], totalValue: 0, gradientStyle: {} };
+    }
+
+    // Group small holdings into "Others"
+    const threshold = 0.02;
+    const mainHoldings = holdings.filter(h => h.current_weight >= threshold);
+    const otherHoldings = holdings.filter(h => h.current_weight < threshold);
+    
+    const data: ChartItem[] = mainHoldings.map((h, i) => ({
+      name: h.currency,
+      value: h.value,
+      percent: h.current_weight * 100,
+      color: COLORS[i % COLORS.length],
+    }));
+
+    if (otherHoldings.length > 0) {
+      const othersValue = otherHoldings.reduce((sum, h) => sum + h.value, 0);
+      const othersPercent = otherHoldings.reduce((sum, h) => sum + h.current_weight, 0) * 100;
+      data.push({
+        name: `기타 (${otherHoldings.length}개)`,
+        value: othersValue,
+        percent: othersPercent,
+        color: COLORS[data.length % COLORS.length],
+      });
+    }
+
+    const total = data.reduce((sum, item) => sum + item.value, 0);
+
+    // Build conic-gradient
+    let currentAngle = 0;
+    const gradientParts: string[] = [];
+    
+    data.forEach((item) => {
+      const angle = (item.value / total) * 360;
+      gradientParts.push(`${item.color} ${currentAngle}deg ${currentAngle + angle}deg`);
+      currentAngle += angle;
+    });
+
+    return {
+      chartData: data,
+      totalValue: total,
+      gradientStyle: {
+        background: gradientParts.length > 0 
+          ? `conic-gradient(${gradientParts.join(', ')})`
+          : '#e5e7eb',
+      },
+    };
+  }, [holdings]);
+
   if (isLoading) {
     const content = (
       <div className="animate-pulse">
@@ -44,92 +88,50 @@ export function PortfolioPieChart({ holdings, isLoading, embedded = false, quote
     return embedded ? content : <div className="card h-80">{content}</div>;
   }
 
-  // Group small holdings into "Others"
-  const threshold = 0.02; // 2%
-  const mainHoldings = holdings.filter(h => h.current_weight >= threshold);
-  const otherHoldings = holdings.filter(h => h.current_weight < threshold);
-  
-  const chartData = mainHoldings.map(h => ({
-    name: h.currency,
-    value: h.value,
-    percent: h.current_weight * 100,
-  }));
-
-  if (otherHoldings.length > 0) {
-    const othersValue = otherHoldings.reduce((sum, h) => sum + h.value, 0);
-    const othersPercent = otherHoldings.reduce((sum, h) => sum + h.current_weight, 0) * 100;
-    chartData.push({
-      name: `기타 (${otherHoldings.length}개)`,
-      value: othersValue,
-      percent: othersPercent,
-    });
-  }
-
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div className="bg-white/95 backdrop-blur-sm p-3 rounded-xl shadow-lg border border-gray-100">
-          <p className="font-semibold text-gray-800">{data.name}</p>
-          <p className="text-gray-600 tabular-nums">
-            {formatNumber(data.value, { maximumFractionDigits: quoteCurrency === 'KRW' ? 0 : 2 })} {quoteCurrency}
-          </p>
-          <p className="text-sm text-gray-400 tabular-nums">{data.percent.toFixed(2)}%</p>
-        </div>
-      );
-    }
-    return null;
-  };
-
-  // Calculate total value for center display
-  const totalValue = chartData.reduce((sum, item) => sum + item.value, 0);
-
   const chartContent = (
     <div className="h-72">
       {chartData.length > 0 ? (
-        <div className="flex h-full">
-          <div className="flex-1 relative">
-            <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={chartData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={75}
-                    outerRadius={110}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                  {chartData.map((_, index) => (
-                    <Cell 
-                      key={`cell-${index}`} 
-                      fill={COLORS[index % COLORS.length]}
-                      stroke="white"
-                      strokeWidth={2}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-              </PieChart>
-            </ResponsiveContainer>
-            {/* Center Label */}
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="text-center">
-                <p className="text-xs text-gray-400">총 자산</p>
-                <p className="text-sm font-bold text-gray-800 tabular-nums">
-                  {formatNumber(totalValue / 10000, { maximumFractionDigits: 0 })}만
-                </p>
+        <div className="flex h-full items-center">
+          {/* Donut Chart */}
+          <div className="flex-1 flex justify-center">
+            <div className="relative">
+              {/* Outer ring with gradient */}
+              <div
+                className="w-52 h-52 rounded-full transition-transform duration-200"
+                style={{
+                  ...gradientStyle,
+                  transform: hoveredIndex !== null ? 'scale(1.02)' : 'scale(1)',
+                }}
+              />
+              {/* Inner circle (donut hole) */}
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-32 h-32 rounded-full bg-white flex items-center justify-center shadow-inner">
+                  <div className="text-center">
+                    <p className="text-xs text-gray-400">총 자산</p>
+                    <p className="text-sm font-bold text-gray-800 tabular-nums">
+                      {formatNumber(totalValue / 10000, { maximumFractionDigits: 0 })}만
+                    </p>
+                    <p className="text-xs text-gray-400">{quoteCurrency}</p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
           
           {/* Legend */}
-          <div className="w-32 flex flex-col justify-center gap-1.5 pl-2">
+          <div className="w-36 flex flex-col justify-center gap-1.5 pl-2">
             {chartData.slice(0, 10).map((item, index) => (
-              <div key={item.name} className="flex items-center gap-1.5">
+              <div 
+                key={item.name} 
+                className={`flex items-center gap-1.5 cursor-pointer rounded px-1 py-0.5 transition-colors ${
+                  hoveredIndex === index ? 'bg-gray-100' : ''
+                }`}
+                onMouseEnter={() => setHoveredIndex(index)}
+                onMouseLeave={() => setHoveredIndex(null)}
+              >
                 <div 
                   className="w-2.5 h-2.5 rounded-sm shrink-0" 
-                  style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                  style={{ backgroundColor: item.color }}
                 />
                 <span className="text-xs text-gray-600 truncate flex-1">{item.name}</span>
                 <span className="text-xs text-gray-400 tabular-nums">{item.percent.toFixed(1)}%</span>
@@ -139,6 +141,17 @@ export function PortfolioPieChart({ holdings, isLoading, embedded = false, quote
               <div className="text-xs text-gray-400 pl-4">+{chartData.length - 10}개 더</div>
             )}
           </div>
+
+          {/* Tooltip on hover */}
+          {hoveredIndex !== null && chartData[hoveredIndex] && (
+            <div className="absolute top-4 left-4 bg-white/95 backdrop-blur-sm p-3 rounded-xl shadow-lg border border-gray-100 z-10">
+              <p className="font-semibold text-gray-800">{chartData[hoveredIndex].name}</p>
+              <p className="text-gray-600 tabular-nums">
+                {formatNumber(chartData[hoveredIndex].value, { maximumFractionDigits: quoteCurrency === 'KRW' ? 0 : 2 })} {quoteCurrency}
+              </p>
+              <p className="text-sm text-gray-400 tabular-nums">{chartData[hoveredIndex].percent.toFixed(2)}%</p>
+            </div>
+          )}
         </div>
       ) : (
         <div className="h-full flex items-center justify-center text-gray-400 bg-gray-50/50 rounded-xl">
@@ -149,11 +162,11 @@ export function PortfolioPieChart({ holdings, isLoading, embedded = false, quote
   );
 
   if (embedded) {
-    return chartContent;
+    return <div className="relative">{chartContent}</div>;
   }
 
   return (
-    <div className="card h-full">
+    <div className="card h-full relative">
       <h3 className="text-lg font-semibold text-gray-800 mb-4">포트폴리오 구성</h3>
       {chartContent}
     </div>
