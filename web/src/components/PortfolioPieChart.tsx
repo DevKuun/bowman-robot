@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import type { Holding } from '../types';
 import { formatNumber } from '../utils/format';
 
@@ -24,12 +24,51 @@ interface ChartItem {
   color: string;
 }
 
+
 export function PortfolioPieChart({ holdings, isLoading, embedded = false, quoteCurrency = 'KRW' }: PortfolioPieChartProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [animationProgress, setAnimationProgress] = useState(0);
+  const animationRef = useRef<number | null>(null);
+  const prevHoldingsKey = useRef<string>('');
 
-  const { chartData, totalValue, gradientStyle } = useMemo(() => {
+  // Animate donut drawing
+  useEffect(() => {
+    const holdingsKey = holdings.map(h => `${h.currency}:${h.value}`).join(',');
+    
+    // Only animate when holdings actually change
+    if (holdingsKey === prevHoldingsKey.current) return;
+    prevHoldingsKey.current = holdingsKey;
+    
+    // Reset and start animation
+    setAnimationProgress(0);
+    const startTime = performance.now();
+    const duration = 800; // ms
+    
+    const animate = (currentTime: number) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Easing function (ease-out)
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setAnimationProgress(eased);
+      
+      if (progress < 1) {
+        animationRef.current = requestAnimationFrame(animate);
+      }
+    };
+    
+    animationRef.current = requestAnimationFrame(animate);
+    
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [holdings]);
+
+  const { chartData, totalValue } = useMemo(() => {
     if (!holdings || holdings.length === 0) {
-      return { chartData: [], totalValue: 0, gradientStyle: {} };
+      return { chartData: [], totalValue: 0 };
     }
 
     // Group small holdings into "Others"
@@ -57,26 +96,40 @@ export function PortfolioPieChart({ holdings, isLoading, embedded = false, quote
 
     const total = data.reduce((sum, item) => sum + item.value, 0);
 
-    // Build conic-gradient
+    return { chartData: data, totalValue: total };
+  }, [holdings]);
+
+  // Build animated gradient
+  const gradientStyle = useMemo(() => {
+    if (chartData.length === 0 || totalValue === 0) {
+      return { background: '#e5e7eb' };
+    }
+
+    const maxAngle = 360 * animationProgress;
     let currentAngle = 0;
     const gradientParts: string[] = [];
     
-    data.forEach((item) => {
-      const angle = (item.value / total) * 360;
-      gradientParts.push(`${item.color} ${currentAngle}deg ${currentAngle + angle}deg`);
-      currentAngle += angle;
-    });
+    for (const item of chartData) {
+      const fullAngle = (item.value / totalValue) * 360;
+      const visibleAngle = Math.min(fullAngle, Math.max(0, maxAngle - currentAngle));
+      
+      if (visibleAngle > 0) {
+        gradientParts.push(`${item.color} ${currentAngle}deg ${currentAngle + visibleAngle}deg`);
+      }
+      currentAngle += fullAngle;
+      
+      if (currentAngle >= maxAngle) break;
+    }
+
+    // Fill remaining with gray during animation
+    if (maxAngle < 360) {
+      gradientParts.push(`#e5e7eb ${maxAngle}deg 360deg`);
+    }
 
     return {
-      chartData: data,
-      totalValue: total,
-      gradientStyle: {
-        background: gradientParts.length > 0 
-          ? `conic-gradient(${gradientParts.join(', ')})`
-          : '#e5e7eb',
-      },
+      background: `conic-gradient(${gradientParts.join(', ')})`,
     };
-  }, [holdings]);
+  }, [chartData, totalValue, animationProgress]);
 
   if (isLoading) {
     const content = (
