@@ -1,4 +1,5 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { memo, useMemo } from 'react';
+import { PieChart, Pie, Cell, Tooltip } from 'recharts';
 import type { Holding } from '../types';
 import { formatNumber } from '../utils/format';
 
@@ -9,7 +10,7 @@ interface PortfolioPieChartProps {
   quoteCurrency?: string;
 }
 
-// Diverse color palette
+// Diverse color palette with better contrast
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
   '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
@@ -17,77 +18,41 @@ const COLORS = [
   '#059669', '#dc2626', '#2563eb', '#ca8a04', '#0891b2',
 ];
 
-interface ChartItem {
-  name: string;
-  value: number;
-  percent: number;
-  color: string;
-}
+// Memoized tooltip component
+const CustomTooltip = memo(({ active, payload, quoteCurrency }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    return (
+      <div className="bg-white/95 backdrop-blur-sm p-3 rounded-xl shadow-lg border border-gray-100">
+        <p className="font-semibold text-gray-800">{data.name}</p>
+        <p className="text-gray-600 tabular-nums">
+          {formatNumber(data.value, { maximumFractionDigits: quoteCurrency === 'KRW' ? 0 : 2 })} {quoteCurrency}
+        </p>
+        <p className="text-sm text-gray-400 tabular-nums">{data.percent.toFixed(2)}%</p>
+      </div>
+    );
+  }
+  return null;
+});
 
+CustomTooltip.displayName = 'CustomTooltip';
 
-export function PortfolioPieChart({ holdings, isLoading, embedded = false, quoteCurrency = 'KRW' }: PortfolioPieChartProps) {
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const [animationProgress, setAnimationProgress] = useState(0);
-  const animationRef = useRef<number | null>(null);
-  const hasAnimated = useRef(false);
-
-  // Animate donut drawing only on first load with data
-  useEffect(() => {
-    // Only animate once when holdings first become available
-    if (hasAnimated.current || !holdings || holdings.length === 0) return;
-    hasAnimated.current = true;
-    
-    // Start animation
-    const startTime = performance.now();
-    const duration = 1200; // ms (slower animation)
-    
-    const animate = (currentTime: number) => {
-      const elapsed = currentTime - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      
-      // Easing function (ease-out cubic)
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setAnimationProgress(eased);
-      
-      if (progress < 1) {
-        animationRef.current = requestAnimationFrame(animate);
-      }
-    };
-    
-    animationRef.current = requestAnimationFrame(animate);
-    
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [holdings]);
-
-  // If already animated, show full chart immediately
-  useEffect(() => {
-    if (hasAnimated.current && animationProgress === 1) {
-      // Keep at 1 for subsequent renders
-    } else if (hasAnimated.current && holdings.length > 0 && animationProgress === 0) {
-      // Data changed after initial animation, show immediately
-      setAnimationProgress(1);
-    }
-  }, [holdings, animationProgress]);
-
+function PortfolioPieChartInner({ holdings, isLoading, embedded = false, quoteCurrency = 'KRW' }: PortfolioPieChartProps) {
+  // Memoize chart data calculation
   const { chartData, totalValue } = useMemo(() => {
     if (!holdings || holdings.length === 0) {
       return { chartData: [], totalValue: 0 };
     }
 
     // Group small holdings into "Others"
-    const threshold = 0.02;
+    const threshold = 0.02; // 2%
     const mainHoldings = holdings.filter(h => h.current_weight >= threshold);
     const otherHoldings = holdings.filter(h => h.current_weight < threshold);
     
-    const data: ChartItem[] = mainHoldings.map((h, i) => ({
+    const data = mainHoldings.map(h => ({
       name: h.currency,
       value: h.value,
       percent: h.current_weight * 100,
-      color: COLORS[i % COLORS.length],
     }));
 
     if (otherHoldings.length > 0) {
@@ -97,46 +62,12 @@ export function PortfolioPieChart({ holdings, isLoading, embedded = false, quote
         name: `기타 (${otherHoldings.length}개)`,
         value: othersValue,
         percent: othersPercent,
-        color: COLORS[data.length % COLORS.length],
       });
     }
 
     const total = data.reduce((sum, item) => sum + item.value, 0);
-
     return { chartData: data, totalValue: total };
   }, [holdings]);
-
-  // Build animated gradient
-  const gradientStyle = useMemo(() => {
-    if (chartData.length === 0 || totalValue === 0) {
-      return { background: '#e5e7eb' };
-    }
-
-    const maxAngle = 360 * animationProgress;
-    let currentAngle = 0;
-    const gradientParts: string[] = [];
-    
-    for (const item of chartData) {
-      const fullAngle = (item.value / totalValue) * 360;
-      const visibleAngle = Math.min(fullAngle, Math.max(0, maxAngle - currentAngle));
-      
-      if (visibleAngle > 0) {
-        gradientParts.push(`${item.color} ${currentAngle}deg ${currentAngle + visibleAngle}deg`);
-      }
-      currentAngle += fullAngle;
-      
-      if (currentAngle >= maxAngle) break;
-    }
-
-    // Fill remaining with gray during animation
-    if (maxAngle < 360) {
-      gradientParts.push(`#e5e7eb ${maxAngle}deg 360deg`);
-    }
-
-    return {
-      background: `conic-gradient(${gradientParts.join(', ')})`,
-    };
-  }, [chartData, totalValue, animationProgress]);
 
   if (isLoading) {
     const content = (
@@ -151,47 +82,51 @@ export function PortfolioPieChart({ holdings, isLoading, embedded = false, quote
   const chartContent = (
     <div className="h-72">
       {chartData.length > 0 ? (
-        <div className="flex h-full items-center">
-          {/* Donut Chart */}
-          <div className="flex-1 flex justify-center">
-            <div className="relative">
-              {/* Outer ring with gradient */}
-              <div
-                className="w-52 h-52 rounded-full transition-transform duration-200"
-                style={{
-                  ...gradientStyle,
-                  transform: hoveredIndex !== null ? 'scale(1.02)' : 'scale(1)',
-                }}
-              />
-              {/* Inner circle (donut hole) */}
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-32 h-32 rounded-full bg-white flex items-center justify-center shadow-inner">
-                  <div className="text-center">
-                    <p className="text-xs text-gray-400">총 자산</p>
-                    <p className="text-sm font-bold text-gray-800 tabular-nums">
-                      {formatNumber(totalValue / 10000, { maximumFractionDigits: 0 })}만
-                    </p>
-                    <p className="text-xs text-gray-400">{quoteCurrency}</p>
-                  </div>
-                </div>
+        <div className="flex h-full">
+          <div className="flex-1 relative flex items-center justify-center">
+            {/* Fixed size instead of ResponsiveContainer for better performance */}
+            <PieChart width={240} height={240}>
+              <Pie
+                data={chartData}
+                cx="50%"
+                cy="50%"
+                innerRadius={70}
+                outerRadius={105}
+                paddingAngle={2}
+                dataKey="value"
+                animationBegin={0}
+                animationDuration={1000}
+                animationEasing="ease-out"
+              >
+                {chartData.map((_, index) => (
+                  <Cell 
+                    key={`cell-${index}`} 
+                    fill={COLORS[index % COLORS.length]}
+                    stroke="white"
+                    strokeWidth={2}
+                  />
+                ))}
+              </Pie>
+              <Tooltip content={<CustomTooltip quoteCurrency={quoteCurrency} />} />
+            </PieChart>
+            {/* Center Label */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="text-center">
+                <p className="text-xs text-gray-400">총 자산</p>
+                <p className="text-sm font-bold text-gray-800 tabular-nums">
+                  {formatNumber(totalValue / 10000, { maximumFractionDigits: 0 })}만
+                </p>
               </div>
             </div>
           </div>
           
           {/* Legend */}
-          <div className="w-36 flex flex-col justify-center gap-1.5 pl-2">
+          <div className="w-32 flex flex-col justify-center gap-1.5 pl-2">
             {chartData.slice(0, 10).map((item, index) => (
-              <div 
-                key={item.name} 
-                className={`flex items-center gap-1.5 cursor-pointer rounded px-1 py-0.5 transition-colors ${
-                  hoveredIndex === index ? 'bg-gray-100' : ''
-                }`}
-                onMouseEnter={() => setHoveredIndex(index)}
-                onMouseLeave={() => setHoveredIndex(null)}
-              >
+              <div key={item.name} className="flex items-center gap-1.5">
                 <div 
                   className="w-2.5 h-2.5 rounded-sm shrink-0" 
-                  style={{ backgroundColor: item.color }}
+                  style={{ backgroundColor: COLORS[index % COLORS.length] }}
                 />
                 <span className="text-xs text-gray-600 truncate flex-1">{item.name}</span>
                 <span className="text-xs text-gray-400 tabular-nums">{item.percent.toFixed(1)}%</span>
@@ -201,17 +136,6 @@ export function PortfolioPieChart({ holdings, isLoading, embedded = false, quote
               <div className="text-xs text-gray-400 pl-4">+{chartData.length - 10}개 더</div>
             )}
           </div>
-
-          {/* Tooltip on hover */}
-          {hoveredIndex !== null && chartData[hoveredIndex] && (
-            <div className="absolute top-4 left-4 bg-white/95 backdrop-blur-sm p-3 rounded-xl shadow-lg border border-gray-100 z-10">
-              <p className="font-semibold text-gray-800">{chartData[hoveredIndex].name}</p>
-              <p className="text-gray-600 tabular-nums">
-                {formatNumber(chartData[hoveredIndex].value, { maximumFractionDigits: quoteCurrency === 'KRW' ? 0 : 2 })} {quoteCurrency}
-              </p>
-              <p className="text-sm text-gray-400 tabular-nums">{chartData[hoveredIndex].percent.toFixed(2)}%</p>
-            </div>
-          )}
         </div>
       ) : (
         <div className="h-full flex items-center justify-center text-gray-400 bg-gray-50/50 rounded-xl">
@@ -222,13 +146,36 @@ export function PortfolioPieChart({ holdings, isLoading, embedded = false, quote
   );
 
   if (embedded) {
-    return <div className="relative">{chartContent}</div>;
+    return chartContent;
   }
 
   return (
-    <div className="card h-full relative">
+    <div className="card h-full">
       <h3 className="text-lg font-semibold text-gray-800 mb-4">포트폴리오 구성</h3>
       {chartContent}
     </div>
   );
 }
+
+// Memoize the entire component to prevent unnecessary re-renders
+export const PortfolioPieChart = memo(PortfolioPieChartInner, (prevProps, nextProps) => {
+  // Custom comparison - only re-render if holdings actually changed significantly
+  if (prevProps.isLoading !== nextProps.isLoading) return false;
+  if (prevProps.holdings.length !== nextProps.holdings.length) return false;
+  
+  // Compare holdings by currency (ignore small value changes)
+  const prevCurrencies = prevProps.holdings.map(h => h.currency).sort().join(',');
+  const nextCurrencies = nextProps.holdings.map(h => h.currency).sort().join(',');
+  if (prevCurrencies !== nextCurrencies) return false;
+  
+  // Check if any weight changed by more than 1%
+  for (let i = 0; i < prevProps.holdings.length; i++) {
+    const prev = prevProps.holdings.find(h => h.currency === nextProps.holdings[i]?.currency);
+    const next = nextProps.holdings[i];
+    if (prev && next && Math.abs(prev.current_weight - next.current_weight) > 0.01) {
+      return false;
+    }
+  }
+  
+  return true; // Props are equal, don't re-render
+});
