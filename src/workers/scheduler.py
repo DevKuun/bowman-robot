@@ -617,10 +617,10 @@ class PaperTradingScheduler:
                         for market in settings.upbit_markets:
                             symbols_for_ob.add(f"{market}-{currency}")
                 
-                # Fetch order books
+                # Fetch order books with more levels for accurate slippage estimation
                 if symbols_for_ob:
                     market_selection_order_books = self.paper_exchange.get_order_books(
-                        list(symbols_for_ob), levels=5
+                        list(symbols_for_ob), levels=15
                     )
             except Exception as e:
                 logger.debug(f"Could not fetch order books for market selection: {e}")
@@ -634,13 +634,31 @@ class PaperTradingScheduler:
             if abs(diff) < th_trd_rate:
                 continue
             
+            # Calculate estimated trade quantity first (for liquidity/slippage check)
+            trade_value = abs(diff) * total_value
+            
+            # Get approximate price in KRW for quantity estimation
+            krw_symbol = f"KRW-{currency}"
+            approx_price = prices.get(krw_symbol)
+            if not approx_price:
+                # Fall back to BTC market price converted to KRW
+                btc_symbol = f"BTC-{currency}"
+                if btc_symbol in prices and 'BTC' in self._cross_rates:
+                    approx_price = prices[btc_symbol] * self._cross_rates['BTC']
+                else:
+                    usdt_symbol = f"USDT-{currency}"
+                    if usdt_symbol in prices and 'USDT' in self._cross_rates:
+                        approx_price = prices[usdt_symbol] * self._cross_rates['USDT']
+            
+            estimated_quantity = trade_value / approx_price if approx_price and approx_price > 0 else Decimal('0')
+            
             # Find symbol and price - find best market by effective price for Upbit
             symbol = None
             price = None
             selected_market = None
             
             if self.exchange_type == ExchangeType.UPBIT:
-                # Use price comparison to find best market (including fees and spread)
+                # Use price comparison to find best market (including fees, spread, and slippage)
                 # Pass available balances for dynamic fee calculation
                 available_balances = {
                     curr: bal.available 
@@ -655,7 +673,9 @@ class PaperTradingScheduler:
                     prices=prices,
                     cross_rates=self._cross_rates,
                     available_balances=available_balances,
-                    order_books=market_selection_order_books
+                    order_books=market_selection_order_books,
+                    trade_quantity=estimated_quantity,
+                    max_slippage=Decimal('0.03')  # 3% max acceptable slippage
                 )
                 
                 if best_result:
@@ -692,9 +712,8 @@ class PaperTradingScheduler:
             if not symbol or not price or price <= 0:
                 continue
             
-            # Calculate trade amount (trade_value is always in KRW for Korean exchanges)
-            trade_value = abs(diff) * total_value
-            # Use KRW-converted price for quantity calculation
+            # trade_value already calculated above for estimated_quantity
+            # Use KRW-converted price for final quantity calculation
             quantity = trade_value / price_in_krw
             
             # Minimum trade check using settings

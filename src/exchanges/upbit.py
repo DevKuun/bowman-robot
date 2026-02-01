@@ -92,10 +92,12 @@ class UpbitExchange(BaseExchange):
         prices: Dict[str, Decimal],
         cross_rates: Optional[Dict[str, Decimal]] = None,
         available_balances: Optional[Dict[str, Decimal]] = None,
-        order_books: Optional[Dict[str, 'OrderBook']] = None
+        order_books: Optional[Dict[str, 'OrderBook']] = None,
+        trade_quantity: Optional[Decimal] = None,
+        max_slippage: Decimal = Decimal('0.03')  # 3% max slippage
     ) -> Optional[tuple[str, Decimal, str]]:
         """
-        Find the best market for a currency based on effective price (including fees and spread).
+        Find the best market for a currency based on effective price (including fees, spread, and slippage).
         
         For buying: find the market with the LOWEST effective price (uses ASK price)
         For selling: find the market with the HIGHEST effective price (uses BID price)
@@ -105,9 +107,9 @@ class UpbitExchange(BaseExchange):
         - Buy without BTC/USDT balance → 2-step fee (KRW → BTC/USDT → Coin)
         - Sell → always 2-step fee (Coin → BTC/USDT → KRW, conservative)
         
-        SPREAD COST for 2-step trades:
-        - Buy: KRW→USDT(ask spread) + USDT→Coin(ask spread)
-        - Sell: Coin→USDT(bid spread) + USDT→KRW(bid spread)
+        SPREAD + SLIPPAGE COST:
+        - Uses order book to estimate actual fill price for given quantity
+        - Skips markets with insufficient liquidity
         
         Args:
             base_currency: Currency to trade (e.g., 'ETH')
@@ -117,7 +119,9 @@ class UpbitExchange(BaseExchange):
                          If None, will be calculated from prices
             available_balances: Dict of currency -> available amount (e.g., {'KRW': 1000000, 'USDT': 100})
                                Used to determine if 1-step or 2-step fees apply
-            order_books: Dict of symbol -> OrderBook for accurate ask/bid pricing
+            order_books: Dict of symbol -> OrderBook for accurate ask/bid pricing and slippage
+            trade_quantity: Amount to trade (in base currency). Used for slippage estimation.
+            max_slippage: Maximum acceptable slippage (default 3%). Markets exceeding this are skipped.
         
         Returns:
             Tuple of (best_symbol, effective_price_in_krw, quote_currency) or None
@@ -147,12 +151,41 @@ class UpbitExchange(BaseExchange):
             if symbol not in prices:
                 continue
             
-            # Use order book price if available, otherwise fall back to trade price
+            # Use order book for accurate pricing and liquidity check
             ob = order_books.get(symbol)
-            if ob and side == 'buy' and ob.best_ask:
-                price = ob.best_ask.price
-            elif ob and side == 'sell' and ob.best_bid:
-                price = ob.best_bid.price
+            
+            # LIQUIDITY CHECK: Skip markets with insufficient liquidity
+            if ob and trade_quantity and trade_quantity > 0:
+                depth = ob.get_depth(side)
+                if depth < trade_quantity * Decimal('0.5'):
+                    # Not enough depth (need at least 50% of order in book)
+                    logger.debug(f"[Liquidity] {symbol}: Skip - depth {depth:.6f} < required {trade_quantity * Decimal('0.5'):.6f}")
+                    continue
+                
+                # SLIPPAGE CHECK: Estimate fill price
+                slippage = ob.estimate_slippage(side, trade_quantity)
+                if slippage and slippage > max_slippage:
+                    logger.debug(f"[Slippage] {symbol}: Skip - estimated {slippage*100:.2f}% > max {max_slippage*100:.2f}%")
+                    continue
+                
+                # Use estimated fill price instead of best price
+                fill_result = ob.estimate_fill_price(side, trade_quantity)
+                if fill_result:
+                    price, _ = fill_result
+                elif side == 'buy' and ob.best_ask:
+                    price = ob.best_ask.price
+                elif side == 'sell' and ob.best_bid:
+                    price = ob.best_bid.price
+                else:
+                    price = prices[symbol]
+            elif ob:
+                # No trade_quantity specified, use best price
+                if side == 'buy' and ob.best_ask:
+                    price = ob.best_ask.price
+                elif side == 'sell' and ob.best_bid:
+                    price = ob.best_bid.price
+                else:
+                    price = prices[symbol]
             else:
                 price = prices[symbol]
             

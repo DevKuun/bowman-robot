@@ -113,6 +113,120 @@ class OrderBook:
         if self.best_bid and self.best_ask:
             return self.best_ask.price - self.best_bid.price
         return None
+    
+    def get_depth(self, side: str) -> Decimal:
+        """
+        Get total depth (volume) available on one side of the book.
+        
+        Args:
+            side: 'buy' (use asks - we'd be taking from sellers) or 
+                  'sell' (use bids - we'd be taking from buyers)
+        
+        Returns:
+            Total quantity available at all price levels
+        """
+        levels = self.asks if side == 'buy' else self.bids
+        return sum(level.quantity for level in levels) if levels else Decimal('0')
+    
+    def get_depth_value(self, side: str) -> Decimal:
+        """
+        Get total depth value (price * quantity) on one side.
+        
+        Returns:
+            Total value available at all price levels
+        """
+        levels = self.asks if side == 'buy' else self.bids
+        return sum(level.price * level.quantity for level in levels) if levels else Decimal('0')
+    
+    def estimate_fill_price(self, side: str, quantity: Decimal) -> Optional[tuple[Decimal, Decimal]]:
+        """
+        Estimate the average fill price for a given quantity.
+        
+        Args:
+            side: 'buy' or 'sell'
+            quantity: Amount to trade
+        
+        Returns:
+            Tuple of (average_fill_price, filled_quantity) or None if insufficient liquidity
+        """
+        # Buy: consume asks (ascending price), Sell: consume bids (descending price)
+        levels = self.asks if side == 'buy' else self.bids
+        
+        if not levels:
+            return None
+        
+        remaining = quantity
+        total_cost = Decimal('0')
+        filled = Decimal('0')
+        
+        for level in levels:
+            if remaining <= 0:
+                break
+            
+            fill_qty = min(remaining, level.quantity)
+            total_cost += fill_qty * level.price
+            filled += fill_qty
+            remaining -= fill_qty
+        
+        if filled == 0:
+            return None
+        
+        avg_price = total_cost / filled
+        return (avg_price, filled)
+    
+    def estimate_slippage(self, side: str, quantity: Decimal) -> Optional[Decimal]:
+        """
+        Estimate slippage percentage for a given quantity.
+        
+        Returns:
+            Slippage as a decimal (e.g., 0.01 = 1%) or None if insufficient data
+        """
+        if side == 'buy':
+            best_price = self.best_ask.price if self.best_ask else None
+        else:
+            best_price = self.best_bid.price if self.best_bid else None
+        
+        if not best_price or best_price == 0:
+            return None
+        
+        result = self.estimate_fill_price(side, quantity)
+        if not result:
+            return None
+        
+        avg_price, _ = result
+        
+        if side == 'buy':
+            # Slippage is how much more we pay vs best price
+            slippage = (avg_price - best_price) / best_price
+        else:
+            # Slippage is how much less we receive vs best price
+            slippage = (best_price - avg_price) / best_price
+        
+        return slippage
+    
+    def has_sufficient_liquidity(self, side: str, quantity: Decimal, max_slippage: Decimal = Decimal('0.05')) -> bool:
+        """
+        Check if there's sufficient liquidity for the order with acceptable slippage.
+        
+        Args:
+            side: 'buy' or 'sell'
+            quantity: Amount to trade
+            max_slippage: Maximum acceptable slippage (default 5%)
+        
+        Returns:
+            True if order can be filled within slippage tolerance
+        """
+        # Check if we can fill the entire quantity
+        depth = self.get_depth(side)
+        if depth < quantity:
+            return False
+        
+        # Check slippage
+        slippage = self.estimate_slippage(side, quantity)
+        if slippage is None:
+            return False
+        
+        return slippage <= max_slippage
 
 
 @dataclass
