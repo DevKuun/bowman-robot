@@ -601,12 +601,20 @@ class PaperTradingScheduler:
             
             if self.exchange_type == ExchangeType.UPBIT:
                 # Use price comparison to find best market (including fees)
+                # Pass available balances for dynamic fee calculation
+                available_balances = {
+                    curr: bal.available 
+                    for curr, bal in balance.balances.items() 
+                    if bal.available > 0
+                }
+                
                 side_str = 'buy' if diff > 0 else 'sell'
                 best_result = self.real_exchange.find_best_market_by_price(
                     base_currency=currency,
                     side=side_str,
                     prices=prices,
-                    cross_rates=self._cross_rates
+                    cross_rates=self._cross_rates,
+                    available_balances=available_balances
                 )
                 
                 if best_result:

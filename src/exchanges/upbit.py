@@ -90,7 +90,8 @@ class UpbitExchange(BaseExchange):
         base_currency: str,
         side: str,  # 'buy' or 'sell'
         prices: Dict[str, Decimal],
-        cross_rates: Optional[Dict[str, Decimal]] = None
+        cross_rates: Optional[Dict[str, Decimal]] = None,
+        available_balances: Optional[Dict[str, Decimal]] = None
     ) -> Optional[tuple[str, Decimal, str]]:
         """
         Find the best market for a currency based on effective price (including fees).
@@ -98,9 +99,10 @@ class UpbitExchange(BaseExchange):
         For buying: find the market with the LOWEST effective price
         For selling: find the market with the HIGHEST effective price
         
-        IMPORTANT: For BTC/USDT markets, considers 2-step fees:
-        - Sell: Coin → BTC/USDT (fee) → KRW (fee)
-        - Buy: KRW → BTC/USDT (fee) → Coin (fee)
+        DYNAMIC FEE CALCULATION based on available balances:
+        - Buy with existing BTC/USDT balance → 1-step fee
+        - Buy without BTC/USDT balance → 2-step fee (KRW → BTC/USDT → Coin)
+        - Sell → always 2-step fee (Coin → BTC/USDT → KRW, conservative)
         
         Args:
             base_currency: Currency to trade (e.g., 'ETH')
@@ -108,12 +110,17 @@ class UpbitExchange(BaseExchange):
             prices: Dict of symbol -> price (e.g., {'KRW-ETH': 5000000, 'BTC-ETH': 0.05})
             cross_rates: Dict of quote currency -> KRW rate (e.g., {'BTC': 150000000, 'USDT': 1450})
                          If None, will be calculated from prices
+            available_balances: Dict of currency -> available amount (e.g., {'KRW': 1000000, 'USDT': 100})
+                               Used to determine if 1-step or 2-step fees apply
         
         Returns:
             Tuple of (best_symbol, effective_price_in_krw, quote_currency) or None
         """
         if cross_rates is None:
             cross_rates = self._calculate_cross_rates(prices)
+        
+        if available_balances is None:
+            available_balances = {}
         
         best_market = None
         best_effective_price = None
@@ -139,22 +146,27 @@ class UpbitExchange(BaseExchange):
                 continue  # Cannot convert, skip this market
             
             # Calculate effective price including fees
-            # For BTC/USDT markets, must consider 2-step conversion fees
+            # Fee steps depend on available balance and trade direction
             if side == 'buy':
                 if market == 'KRW':
                     # Direct: KRW → Coin (1 fee)
                     effective_price = price_in_krw * (1 + fee_rate)
                 else:
-                    # 2-step: KRW → BTC/USDT (fee) → Coin (fee)
-                    # Total cost = price_in_krw * (1 + krw_fee) * (1 + market_fee)
-                    effective_price = price_in_krw * (1 + krw_fee_rate) * (1 + fee_rate)
+                    # Check if we have balance in this market's quote currency
+                    has_balance = available_balances.get(market, Decimal('0')) > 0
+                    if has_balance:
+                        # 1-step: BTC/USDT → Coin (already have quote currency)
+                        effective_price = price_in_krw * (1 + fee_rate)
+                    else:
+                        # 2-step: KRW → BTC/USDT (fee) → Coin (fee)
+                        effective_price = price_in_krw * (1 + krw_fee_rate) * (1 + fee_rate)
             else:  # sell
                 if market == 'KRW':
                     # Direct: Coin → KRW (1 fee)
                     effective_price = price_in_krw * (1 - fee_rate)
                 else:
-                    # 2-step: Coin → BTC/USDT (fee) → KRW (fee)
-                    # Total received = price_in_krw * (1 - market_fee) * (1 - krw_fee)
+                    # Sell always assumes 2-step (conservative: will convert to KRW eventually)
+                    # Coin → BTC/USDT (fee) → KRW (fee)
                     effective_price = price_in_krw * (1 - fee_rate) * (1 - krw_fee_rate)
             
             # Compare and find best
