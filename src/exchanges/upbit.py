@@ -207,6 +207,12 @@ class UpbitExchange(BaseExchange):
                 else:
                     price = prices[symbol]
             else:
+                # No order book available
+                # For BTC/USDT markets, order book is REQUIRED (skip if missing)
+                # Only KRW market can proceed without order book
+                if market != 'KRW':
+                    logger.debug(f"[No OrderBook] {symbol}: BTC/USDT market requires order book - skip")
+                    continue
                 price = prices[symbol]
             
             fee_rate = Decimal(str(self.get_fee_rate(market)))

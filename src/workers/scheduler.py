@@ -976,61 +976,76 @@ class PaperTradingScheduler:
                             symbol = step2_symbol
                             logger.info(f"[2-Step] Step 2: Buying {quantity:.8f} {trade['currency']}")
             
-            if self.realistic_execution and symbol in order_books:
-                ob = order_books[symbol]
-                side_str = 'buy' if side == OrderSide.BUY else 'sell'
-                
-                # PRE-EXECUTION LIQUIDITY/SLIPPAGE CHECK
-                max_exec_slippage = Decimal('0.03')  # 3% max
-                skip_trade = False
-                fallback_to_krw = False
-                
-                # Check order book validity first
-                if side_str == 'buy' and (not ob.asks or not ob.best_ask or ob.best_ask.price <= 0):
-                    logger.warning(f"[Invalid Market] {symbol}: No valid ask prices - skipping")
-                    skip_trade = True
-                elif side_str == 'sell' and (not ob.bids or not ob.best_bid or ob.best_bid.price <= 0):
-                    logger.warning(f"[Invalid Market] {symbol}: No valid bid prices - skipping")
-                    skip_trade = True
-                
-                # Check liquidity
-                if not skip_trade:
-                    depth = ob.get_depth(side_str)
-                    if depth < quantity * Decimal('0.3'):
-                        logger.warning(f"[Liquidity] {symbol}: Insufficient depth {depth:.6f} for {quantity:.6f} - skipping")
+            # For BTC/USDT markets, order book is REQUIRED
+            # Skip if no order book available for non-KRW markets
+            order = None
+            
+            if self.realistic_execution:
+                if symbol not in order_books:
+                    if not symbol.startswith('KRW-'):
+                        logger.warning(f"[No OrderBook] {symbol}: BTC/USDT market requires order book - skipping")
+                        continue
+                    # KRW market without order book - use simple execution
+                    order = self.paper_exchange.place_order(
+                        symbol=symbol,
+                        side=side,
+                        order_type=OrderType.LIMIT,
+                        quantity=quantity,
+                        price=trade['price']
+                    )
+                else:
+                    ob = order_books[symbol]
+                    side_str = 'buy' if side == OrderSide.BUY else 'sell'
+                    
+                    # PRE-EXECUTION LIQUIDITY/SLIPPAGE CHECK
+                    max_exec_slippage = Decimal('0.03')  # 3% max
+                    skip_trade = False
+                    
+                    # Check order book validity first
+                    if side_str == 'buy' and (not ob.asks or not ob.best_ask or ob.best_ask.price <= 0):
+                        logger.warning(f"[Invalid Market] {symbol}: No valid ask prices - skipping")
                         skip_trade = True
-                
-                # Check slippage
-                if not skip_trade:
-                    estimated_slippage = ob.estimate_slippage(side_str, quantity)
-                    if estimated_slippage and estimated_slippage > max_exec_slippage:
-                        # Try KRW market instead if available
-                        krw_symbol = f"KRW-{trade['currency']}"
-                        if not symbol.startswith('KRW-') and krw_symbol in order_books:
-                            krw_ob = order_books[krw_symbol]
-                            krw_slippage = krw_ob.estimate_slippage(side_str, quantity)
-                            if krw_slippage is None or krw_slippage <= max_exec_slippage:
-                                logger.info(f"[Slippage] {symbol}: {estimated_slippage*100:.2f}% > 3% - fallback to {krw_symbol}")
-                                fallback_to_krw = True
-                                symbol = krw_symbol
-                                ob = krw_ob
-                            else:
-                                logger.warning(f"[Slippage] {symbol}: {estimated_slippage*100:.2f}% too high, KRW also high - skipping")
-                                skip_trade = True
-                        else:
-                            logger.warning(f"[Slippage] {symbol}: {estimated_slippage*100:.2f}% > 3% - skipping")
+                    elif side_str == 'sell' and (not ob.bids or not ob.best_bid or ob.best_bid.price <= 0):
+                        logger.warning(f"[Invalid Market] {symbol}: No valid bid prices - skipping")
+                        skip_trade = True
+                    
+                    # Check liquidity
+                    if not skip_trade:
+                        depth = ob.get_depth(side_str)
+                        if depth < quantity * Decimal('0.3'):
+                            logger.warning(f"[Liquidity] {symbol}: Insufficient depth {depth:.6f} for {quantity:.6f} - skipping")
                             skip_trade = True
-                
-                if skip_trade:
-                    continue
-                
-                # Use realistic execution with order book
-                order = self.paper_exchange.place_order_realistic(
-                    symbol=symbol,
-                    side=side,
-                    quantity=quantity,
-                    order_book=ob
-                )
+                    
+                    # Check slippage
+                    if not skip_trade:
+                        estimated_slippage = ob.estimate_slippage(side_str, quantity)
+                        if estimated_slippage and estimated_slippage > max_exec_slippage:
+                            # Try KRW market instead if available
+                            krw_symbol = f"KRW-{trade['currency']}"
+                            if not symbol.startswith('KRW-') and krw_symbol in order_books:
+                                krw_ob = order_books[krw_symbol]
+                                krw_slippage = krw_ob.estimate_slippage(side_str, quantity)
+                                if krw_slippage is None or krw_slippage <= max_exec_slippage:
+                                    logger.info(f"[Slippage] {symbol}: {estimated_slippage*100:.2f}% > 3% - fallback to {krw_symbol}")
+                                    symbol = krw_symbol
+                                    ob = krw_ob
+                                else:
+                                    logger.warning(f"[Slippage] {symbol}: {estimated_slippage*100:.2f}% too high, KRW also high - skipping")
+                                    skip_trade = True
+                            else:
+                                logger.warning(f"[Slippage] {symbol}: {estimated_slippage*100:.2f}% > 3% - skipping")
+                                skip_trade = True
+                    
+                    if skip_trade:
+                        continue
+                    
+                    # Use realistic execution with order book
+                    order = self.paper_exchange.place_order_realistic(
+                        symbol=symbol,
+                        side=side,
+                        quantity=quantity,
+                        order_book=ob
+                    )
             else:
                 # Fallback to simple execution
                 order = self.paper_exchange.place_order(
