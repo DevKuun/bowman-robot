@@ -165,6 +165,15 @@ class UpbitExchange(BaseExchange):
             # Use order book for accurate pricing and liquidity check
             ob = order_books.get(symbol)
             
+            # VALIDITY CHECK: Skip markets with no valid order book data
+            if ob:
+                if side == 'buy' and (not ob.asks or not ob.best_ask or ob.best_ask.price <= 0):
+                    logger.debug(f"[Invalid] {symbol}: No valid ask prices - skip")
+                    continue
+                if side == 'sell' and (not ob.bids or not ob.best_bid or ob.best_bid.price <= 0):
+                    logger.debug(f"[Invalid] {symbol}: No valid bid prices - skip")
+                    continue
+            
             # LIQUIDITY CHECK: Skip markets with insufficient liquidity
             if ob and trade_quantity and trade_quantity > 0:
                 depth = ob.get_depth(side)

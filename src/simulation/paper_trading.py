@@ -457,6 +457,16 @@ class PaperTradingAccount:
         Returns:
             Simulated order result (may be partially filled)
         """
+        # Validate order book has data
+        if side in [OrderSide.BUY, OrderSide.BID]:
+            if not order_book.asks or not order_book.best_ask or order_book.best_ask.price <= 0:
+                logger.warning(f"[Invalid Market] {symbol}: No valid ask prices - skipping trade")
+                return None
+        else:
+            if not order_book.bids or not order_book.best_bid or order_book.best_bid.price <= 0:
+                logger.warning(f"[Invalid Market] {symbol}: No valid bid prices - skipping trade")
+                return None
+        
         base_currency = self._get_base_currency(symbol)
         quote_currency = self._get_quote_currency_from_symbol(symbol)
         

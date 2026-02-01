@@ -985,11 +985,20 @@ class PaperTradingScheduler:
                 skip_trade = False
                 fallback_to_krw = False
                 
-                # Check liquidity
-                depth = ob.get_depth(side_str)
-                if depth < quantity * Decimal('0.3'):
-                    logger.warning(f"[Liquidity] {symbol}: Insufficient depth {depth:.6f} for {quantity:.6f} - skipping")
+                # Check order book validity first
+                if side_str == 'buy' and (not ob.asks or not ob.best_ask or ob.best_ask.price <= 0):
+                    logger.warning(f"[Invalid Market] {symbol}: No valid ask prices - skipping")
                     skip_trade = True
+                elif side_str == 'sell' and (not ob.bids or not ob.best_bid or ob.best_bid.price <= 0):
+                    logger.warning(f"[Invalid Market] {symbol}: No valid bid prices - skipping")
+                    skip_trade = True
+                
+                # Check liquidity
+                if not skip_trade:
+                    depth = ob.get_depth(side_str)
+                    if depth < quantity * Decimal('0.3'):
+                        logger.warning(f"[Liquidity] {symbol}: Insufficient depth {depth:.6f} for {quantity:.6f} - skipping")
+                        skip_trade = True
                 
                 # Check slippage
                 if not skip_trade:
