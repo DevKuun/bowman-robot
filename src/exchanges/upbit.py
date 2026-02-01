@@ -91,18 +91,23 @@ class UpbitExchange(BaseExchange):
         side: str,  # 'buy' or 'sell'
         prices: Dict[str, Decimal],
         cross_rates: Optional[Dict[str, Decimal]] = None,
-        available_balances: Optional[Dict[str, Decimal]] = None
+        available_balances: Optional[Dict[str, Decimal]] = None,
+        order_books: Optional[Dict[str, 'OrderBook']] = None
     ) -> Optional[tuple[str, Decimal, str]]:
         """
-        Find the best market for a currency based on effective price (including fees).
+        Find the best market for a currency based on effective price (including fees and spread).
         
-        For buying: find the market with the LOWEST effective price
-        For selling: find the market with the HIGHEST effective price
+        For buying: find the market with the LOWEST effective price (uses ASK price)
+        For selling: find the market with the HIGHEST effective price (uses BID price)
         
         DYNAMIC FEE CALCULATION based on available balances:
         - Buy with existing BTC/USDT balance → 1-step fee
         - Buy without BTC/USDT balance → 2-step fee (KRW → BTC/USDT → Coin)
         - Sell → always 2-step fee (Coin → BTC/USDT → KRW, conservative)
+        
+        SPREAD COST for 2-step trades:
+        - Buy: KRW→USDT(ask spread) + USDT→Coin(ask spread)
+        - Sell: Coin→USDT(bid spread) + USDT→KRW(bid spread)
         
         Args:
             base_currency: Currency to trade (e.g., 'ETH')
@@ -112,6 +117,7 @@ class UpbitExchange(BaseExchange):
                          If None, will be calculated from prices
             available_balances: Dict of currency -> available amount (e.g., {'KRW': 1000000, 'USDT': 100})
                                Used to determine if 1-step or 2-step fees apply
+            order_books: Dict of symbol -> OrderBook for accurate ask/bid pricing
         
         Returns:
             Tuple of (best_symbol, effective_price_in_krw, quote_currency) or None
@@ -122,11 +128,18 @@ class UpbitExchange(BaseExchange):
         if available_balances is None:
             available_balances = {}
         
+        if order_books is None:
+            order_books = {}
+        
         best_market = None
         best_effective_price = None
         best_quote = None
         
         krw_fee_rate = Decimal(str(self.get_fee_rate('KRW')))  # 0.05%
+        
+        # Get cross-market order books for 2-step spread calculation
+        krw_usdt_ob = order_books.get('KRW-USDT')
+        krw_btc_ob = order_books.get('KRW-BTC')
         
         for market in settings.upbit_markets:
             symbol = f"{market}-{base_currency}"
@@ -134,7 +147,15 @@ class UpbitExchange(BaseExchange):
             if symbol not in prices:
                 continue
             
-            price = prices[symbol]
+            # Use order book price if available, otherwise fall back to trade price
+            ob = order_books.get(symbol)
+            if ob and side == 'buy' and ob.best_ask:
+                price = ob.best_ask.price
+            elif ob and side == 'sell' and ob.best_bid:
+                price = ob.best_bid.price
+            else:
+                price = prices[symbol]
+            
             fee_rate = Decimal(str(self.get_fee_rate(market)))
             
             # Convert price to KRW for comparison
@@ -145,11 +166,11 @@ class UpbitExchange(BaseExchange):
             else:
                 continue  # Cannot convert, skip this market
             
-            # Calculate effective price including fees
+            # Calculate effective price including fees AND spread costs
             # Fee steps depend on available balance and trade direction
             if side == 'buy':
                 if market == 'KRW':
-                    # Direct: KRW → Coin (1 fee)
+                    # Direct: KRW → Coin (1 fee, ask price already used)
                     effective_price = price_in_krw * (1 + fee_rate)
                 else:
                     # Check if we have balance in this market's quote currency
@@ -158,16 +179,37 @@ class UpbitExchange(BaseExchange):
                         # 1-step: BTC/USDT → Coin (already have quote currency)
                         effective_price = price_in_krw * (1 + fee_rate)
                     else:
-                        # 2-step: KRW → BTC/USDT (fee) → Coin (fee)
-                        effective_price = price_in_krw * (1 + krw_fee_rate) * (1 + fee_rate)
+                        # 2-step: KRW → BTC/USDT (fee + spread) → Coin (fee + spread)
+                        # Calculate spread cost for step 1 (buying USDT/BTC with KRW)
+                        step1_spread = Decimal('0')
+                        if market == 'USDT' and krw_usdt_ob and krw_usdt_ob.spread:
+                            # Spread as percentage of mid price
+                            if krw_usdt_ob.mid_price and krw_usdt_ob.mid_price > 0:
+                                step1_spread = krw_usdt_ob.spread / krw_usdt_ob.mid_price / 2
+                        elif market == 'BTC' and krw_btc_ob and krw_btc_ob.spread:
+                            if krw_btc_ob.mid_price and krw_btc_ob.mid_price > 0:
+                                step1_spread = krw_btc_ob.spread / krw_btc_ob.mid_price / 2
+                        
+                        # Step 2 spread is already reflected in using ask price
+                        effective_price = price_in_krw * (1 + krw_fee_rate + step1_spread) * (1 + fee_rate)
             else:  # sell
                 if market == 'KRW':
-                    # Direct: Coin → KRW (1 fee)
+                    # Direct: Coin → KRW (1 fee, bid price already used)
                     effective_price = price_in_krw * (1 - fee_rate)
                 else:
                     # Sell always assumes 2-step (conservative: will convert to KRW eventually)
-                    # Coin → BTC/USDT (fee) → KRW (fee)
-                    effective_price = price_in_krw * (1 - fee_rate) * (1 - krw_fee_rate)
+                    # Coin → BTC/USDT (fee + spread) → KRW (fee + spread)
+                    # Calculate spread cost for step 2 (selling USDT/BTC for KRW)
+                    step2_spread = Decimal('0')
+                    if market == 'USDT' and krw_usdt_ob and krw_usdt_ob.spread:
+                        if krw_usdt_ob.mid_price and krw_usdt_ob.mid_price > 0:
+                            step2_spread = krw_usdt_ob.spread / krw_usdt_ob.mid_price / 2
+                    elif market == 'BTC' and krw_btc_ob and krw_btc_ob.spread:
+                        if krw_btc_ob.mid_price and krw_btc_ob.mid_price > 0:
+                            step2_spread = krw_btc_ob.spread / krw_btc_ob.mid_price / 2
+                    
+                    # Step 1 spread is already reflected in using bid price
+                    effective_price = price_in_krw * (1 - fee_rate) * (1 - krw_fee_rate - step2_spread)
             
             # Compare and find best
             if best_effective_price is None:

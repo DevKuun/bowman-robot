@@ -601,6 +601,30 @@ class PaperTradingScheduler:
         th_trd_rate = Decimal(str(settings.trading_th_trd_rate))  # From settings (default 0.01%)
         trades_to_execute = []
         
+        # Pre-fetch order books for accurate market selection (ask/bid + spread)
+        market_selection_order_books = {}
+        if self.exchange_type == ExchangeType.UPBIT and self.realistic_execution:
+            try:
+                # Collect all possible symbols for currencies that need rebalancing
+                symbols_for_ob = set()
+                # Add cross-market symbols for spread calculation
+                symbols_for_ob.add('KRW-USDT')
+                symbols_for_ob.add('KRW-BTC')
+                
+                for currency, target_weight in self.target_weights.items():
+                    current_weight = current_weights.get(currency, Decimal('0'))
+                    if abs(Decimal(str(target_weight)) - current_weight) >= th_trd_rate:
+                        for market in settings.upbit_markets:
+                            symbols_for_ob.add(f"{market}-{currency}")
+                
+                # Fetch order books
+                if symbols_for_ob:
+                    market_selection_order_books = self.paper_exchange.get_order_books(
+                        list(symbols_for_ob), levels=5
+                    )
+            except Exception as e:
+                logger.debug(f"Could not fetch order books for market selection: {e}")
+        
         for currency, target_weight in self.target_weights.items():
             current_weight = current_weights.get(currency, Decimal('0'))
             target_w = Decimal(str(target_weight))
@@ -616,7 +640,7 @@ class PaperTradingScheduler:
             selected_market = None
             
             if self.exchange_type == ExchangeType.UPBIT:
-                # Use price comparison to find best market (including fees)
+                # Use price comparison to find best market (including fees and spread)
                 # Pass available balances for dynamic fee calculation
                 available_balances = {
                     curr: bal.available 
@@ -630,7 +654,8 @@ class PaperTradingScheduler:
                     side=side_str,
                     prices=prices,
                     cross_rates=self._cross_rates,
-                    available_balances=available_balances
+                    available_balances=available_balances,
+                    order_books=market_selection_order_books
                 )
                 
                 if best_result:
@@ -705,33 +730,62 @@ class PaperTradingScheduler:
                 continue
             
             # Determine side and check available balance
+            two_step_trade = None  # For 2-step trades: KRW→USDT→Coin
+            
             if diff > 0:
                 side = OrderSide.BUY
                 
                 # For Upbit: Check the selected market's quote currency balance
-                # If not available, fallback to KRW market
+                # If not available, consider 2-step trade or fallback to KRW market
                 if self.exchange_type == ExchangeType.UPBIT and selected_market:
                     required_quote = selected_market  # BTC, USDT, or KRW
                     available_quote = balance.balances.get(required_quote)
                     
-                    # Fallback to KRW if selected market's balance is insufficient
+                    # If no balance in selected market and it's not KRW
                     if (not available_quote or available_quote.available <= 0) and required_quote != 'KRW':
-                        # Try KRW market instead
+                        # Check if 2-step trade is still better than direct KRW trade
                         krw_symbol = f"KRW-{currency}"
-                        if krw_symbol in prices:
-                            logger.debug(f"[Fallback] {currency}: No {required_quote} balance, using KRW market")
-                            symbol = krw_symbol
-                            price = prices[symbol]
-                            price_in_krw = price
-                            selected_market = 'KRW'
-                            available_quote = balance.balances.get('KRW')
-                            min_trade_krw = Decimal(str(settings.upbit_min_trade_krw))
+                        krw_quote_symbol = f"KRW-{required_quote}"  # KRW-USDT or KRW-BTC
+                        
+                        if krw_symbol in prices and krw_quote_symbol in prices:
+                            # Compare: 2-step (KRW→USDT→Coin) vs 1-step (KRW→Coin)
+                            # effective_price already includes 2-step fees+spread
+                            krw_direct_price = prices[krw_symbol]
+                            krw_fee = Decimal(str(self.real_exchange.get_fee_rate('KRW')))
+                            krw_effective = krw_direct_price * (1 + krw_fee)
+                            
+                            # If 2-step is still better (effective_price < krw_effective)
+                            if effective_price < krw_effective:
+                                # Execute 2-step trade
+                                krw_balance = balance.balances.get('KRW')
+                                if krw_balance and krw_balance.available > 0:
+                                    two_step_trade = {
+                                        'step1_symbol': krw_quote_symbol,  # KRW-USDT
+                                        'step1_quote': required_quote,      # USDT
+                                        'step2_symbol': symbol,             # USDT-ETH
+                                    }
+                                    available_quote = krw_balance
+                                    selected_market = 'KRW'  # We're using KRW to buy
+                                    logger.info(f"[2-Step Trade] {currency}: KRW→{required_quote}→{currency} "
+                                               f"(saves {((krw_effective - effective_price) / krw_effective * 100):.2f}%)")
+                            else:
+                                # KRW direct is better, use fallback
+                                logger.debug(f"[Fallback] {currency}: KRW direct is better than 2-step")
+                                symbol = krw_symbol
+                                price = prices[symbol]
+                                price_in_krw = price
+                                selected_market = 'KRW'
+                                available_quote = balance.balances.get('KRW')
+                                min_trade_krw = Decimal(str(settings.upbit_min_trade_krw))
+                        else:
+                            # No KRW market available, skip
+                            continue
                     
                     if not available_quote or available_quote.available <= 0:
                         continue
                     
                     # Calculate max buy value in KRW terms
-                    if selected_market == 'KRW':
+                    if selected_market == 'KRW' or two_step_trade:
                         max_buy_value = available_quote.available * Decimal('0.95')
                     else:
                         # Convert BTC/USDT balance to KRW for comparison
@@ -769,9 +823,12 @@ class PaperTradingScheduler:
                 'quantity': quantity,
                 'price': price,
                 'min_trade_krw': min_trade_krw,
-                'original_trade_value': trade_value  # Store original value for slippage check
+                'original_trade_value': trade_value,  # Store original value for slippage check
+                'two_step_trade': two_step_trade  # None or {step1_symbol, step1_quote, step2_symbol}
             })
             symbols_to_trade.append(symbol)
+            if two_step_trade:
+                symbols_to_trade.append(two_step_trade['step1_symbol'])
         
         # Sort trades: SELL first, then BUY
         # This ensures we have funds from sales before making purchases
@@ -800,6 +857,49 @@ class PaperTradingScheduler:
             side = trade['side']
             quantity = trade['quantity']
             min_trade_krw = trade['min_trade_krw']
+            two_step = trade.get('two_step_trade')
+            
+            # Handle 2-step trade: KRW → USDT/BTC → Coin
+            if two_step and side == OrderSide.BUY:
+                step1_symbol = two_step['step1_symbol']  # e.g., KRW-USDT
+                step1_quote = two_step['step1_quote']    # e.g., USDT
+                step2_symbol = two_step['step2_symbol']  # e.g., USDT-ETH
+                
+                # Step 1: Buy USDT/BTC with KRW
+                # Calculate how much USDT/BTC we need for step 2
+                step2_price = prices.get(step2_symbol, Decimal('0'))
+                if step2_price > 0:
+                    step1_quantity = quantity * step2_price * Decimal('1.01')  # 1% buffer for fees
+                    
+                    logger.info(f"[2-Step] Step 1: Buying {step1_quantity:.4f} {step1_quote}")
+                    
+                    if self.realistic_execution and step1_symbol in order_books:
+                        step1_order = self.paper_exchange.place_order_realistic(
+                            symbol=step1_symbol,
+                            side=OrderSide.BUY,
+                            quantity=step1_quantity,
+                            order_book=order_books[step1_symbol]
+                        )
+                    else:
+                        step1_price = prices.get(step1_symbol, Decimal('0'))
+                        step1_order = self.paper_exchange.place_order(
+                            symbol=step1_symbol,
+                            side=OrderSide.BUY,
+                            order_type=OrderType.LIMIT,
+                            quantity=step1_quantity,
+                            price=step1_price
+                        )
+                    
+                    if not step1_order or step1_order.filled_quantity <= 0:
+                        logger.warning(f"[2-Step] Step 1 failed for {trade['currency']}")
+                        continue
+                    
+                    logger.info(f"[2-Step] Step 1 completed: {step1_order.filled_quantity:.4f} {step1_quote}")
+                    
+                    # Step 2: Buy Coin with USDT/BTC
+                    # Use the symbol from two_step (e.g., USDT-ETH)
+                    symbol = step2_symbol
+                    logger.info(f"[2-Step] Step 2: Buying {quantity:.8f} {trade['currency']}")
             
             if self.realistic_execution and symbol in order_books:
                 # Use realistic execution with order book
@@ -858,6 +958,40 @@ class PaperTradingScheduler:
                                 f"Trade below minimum: {symbol} {side.value} "
                                 f"filled={filled_value_krw:.0f} < min={min_trade_krw:.0f}"
                             )
+        
+        # Auto-convert USDT/BTC to KRW after trades (if enabled)
+        if self.exchange_type == ExchangeType.UPBIT and settings.upbit_auto_convert_to_krw:
+            updated_balance = self.paper_exchange.get_account_balance()
+            
+            for quote_currency in ['USDT', 'BTC']:
+                quote_bal = updated_balance.balances.get(quote_currency)
+                if quote_bal and quote_bal.available > Decimal('0.0001'):
+                    convert_symbol = f"KRW-{quote_currency}"
+                    convert_quantity = quote_bal.available
+                    
+                    # Check minimum trade value
+                    if quote_currency in self._cross_rates:
+                        value_in_krw = convert_quantity * self._cross_rates[quote_currency]
+                        if value_in_krw >= Decimal('5000'):  # Min KRW trade
+                            logger.info(f"[Auto-Convert] Selling {convert_quantity:.4f} {quote_currency} to KRW")
+                            
+                            if self.realistic_execution and convert_symbol in order_books:
+                                self.paper_exchange.place_order_realistic(
+                                    symbol=convert_symbol,
+                                    side=OrderSide.SELL,
+                                    quantity=convert_quantity,
+                                    order_book=order_books[convert_symbol]
+                                )
+                            else:
+                                convert_price = prices.get(convert_symbol, Decimal('0'))
+                                if convert_price > 0:
+                                    self.paper_exchange.place_order(
+                                        symbol=convert_symbol,
+                                        side=OrderSide.SELL,
+                                        order_type=OrderType.LIMIT,
+                                        quantity=convert_quantity,
+                                        price=convert_price
+                                    )
         
         # Take snapshot periodically
         if (now - self.last_snapshot).seconds >= 60:

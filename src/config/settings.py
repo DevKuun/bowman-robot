@@ -87,6 +87,10 @@ class Settings(BaseSettings):
         default="KRW",
         description="Primary market for portfolio valuation"
     )
+    upbit_auto_convert_to_krw: bool = Field(
+        default=True,
+        description="Automatically convert USDT/BTC to KRW after selling (reduces currency risk)"
+    )
     
     binance_fee_discount: float = Field(default=0.25, description="Binance BNB fee discount")
     binance_referral_kickback: float = Field(default=0.2, description="Binance referral kickback")
