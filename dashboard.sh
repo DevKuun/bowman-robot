@@ -13,6 +13,7 @@ mkdir -p "$SCRIPT_DIR/logs"
 
 start() {
     # Kill any existing process
+    pkill -9 -f "src.api.run" 2>/dev/null || true
     sudo pkill -9 -f "src.api.run" 2>/dev/null || true
     rm -f "$PID_FILE"
     sleep 1
@@ -32,13 +33,13 @@ start() {
         source "$SCRIPT_DIR/venv/bin/activate"
     fi
     
-    # Start API server in background
-    nohup sudo "$SCRIPT_DIR/venv/bin/python3" -m src.api.run --port "$PORT" > "$LOG_FILE" 2>&1 &
+    # Start API server in background (no sudo for local)
+    nohup "$SCRIPT_DIR/venv/bin/python3" -m src.api.run --port "$PORT" > "$LOG_FILE" 2>&1 &
     PID=$!
     echo $PID > "$PID_FILE"
     
     # Wait a moment and check if it started
-    sleep 2
+    sleep 3
     
     # Check health
     result=$(curl -s "http://localhost:$PORT/api/health" 2>/dev/null || echo "")
@@ -57,6 +58,7 @@ start() {
 
 stop() {
     echo "Stopping Dashboard..."
+    pkill -9 -f "src.api.run" 2>/dev/null || true
     sudo pkill -9 -f "src.api.run" 2>/dev/null || true
     rm -f "$PID_FILE"
     sleep 1

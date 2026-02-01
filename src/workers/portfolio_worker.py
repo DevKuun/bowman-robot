@@ -100,19 +100,12 @@ class PortfolioWorker:
         all_pairs = exchange.get_trading_pairs()
         
         if self.exchange_type == ExchangeType.UPBIT:
-            # Upbit: Use configured markets (KRW, BTC, USDT)
-            enabled_markets = settings.upbit_markets
-            pairs = [p for p in all_pairs if p.quote_currency in enabled_markets]
+            # Upbit: Use KRW market ONLY for portfolio optimization
+            # (BTC/USDT markets don't have enough historical data for 2-year analysis)
+            # Trading will still use all enabled markets for best price
+            pairs = [p for p in all_pairs if p.quote_currency == 'KRW']
             
-            # Deduplicate: if same base currency exists in multiple markets, prefer by priority
-            seen_bases = {}
-            market_priority = {'KRW': 0, 'USDT': 1, 'BTC': 2}
-            for p in sorted(pairs, key=lambda x: market_priority.get(x.quote_currency, 99)):
-                if p.base_currency not in seen_bases:
-                    seen_bases[p.base_currency] = p
-            pairs = list(seen_bases.values())
-            
-            logger.info(f"Upbit markets enabled: {enabled_markets}, {len(pairs)} unique assets")
+            logger.info(f"Using KRW market for optimization: {len(pairs)} pairs")
         elif self.exchange_type == ExchangeType.BITHUMB:
             # Bithumb: KRW market only
             pairs = [p for p in all_pairs if p.symbol.endswith('_KRW')]
