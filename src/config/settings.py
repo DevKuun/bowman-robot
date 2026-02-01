@@ -113,6 +113,16 @@ class Settings(BaseSettings):
     # Risk levels
     risk_levels: int = Field(default=5, description="Number of risk levels (0-4)")
     
+    # Portfolio optimization settings
+    portfolio_min_daily_volume_krw: int = Field(
+        default=1_000_000_000,  # 10억원
+        description="Minimum 24h trading volume in KRW to include in portfolio"
+    )
+    portfolio_reoptimize_hours: int = Field(
+        default=24,
+        description="Hours between automatic portfolio re-optimization (0 to disable)"
+    )
+    
     # Stablecoin identifiers (used for portfolio constraints and UI)
     stablecoins: List[str] = Field(
         default=["USDT", "USDC", "USDS", "USD1", "DAI", "TUSD", "BUSD", "USDP", "FDUSD", "EUR", "AEUR", "EURI"],

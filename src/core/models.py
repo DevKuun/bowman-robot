@@ -335,6 +335,7 @@ class PriceData:
     symbol: str
     price: Decimal
     timestamp: datetime = field(default_factory=datetime.utcnow)
+    volume_24h: Optional[Decimal] = None  # 24h trading volume in quote currency
 
 
 @dataclass

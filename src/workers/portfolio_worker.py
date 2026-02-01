@@ -105,6 +105,23 @@ class PortfolioWorker:
             # Trading will still use all enabled markets for best price
             pairs = [p for p in all_pairs if p.quote_currency == 'KRW']
             
+            # Filter by 24h trading volume to exclude illiquid coins
+            min_volume = settings.portfolio_min_daily_volume_krw
+            if min_volume > 0:
+                try:
+                    tickers = exchange.get_all_tickers()
+                    high_volume_symbols = {
+                        symbol for symbol, data in tickers.items()
+                        if data.volume_24h and data.volume_24h >= min_volume
+                    }
+                    before_count = len(pairs)
+                    pairs = [p for p in pairs if p.symbol in high_volume_symbols]
+                    filtered_count = before_count - len(pairs)
+                    if filtered_count > 0:
+                        logger.info(f"Filtered out {filtered_count} low-volume pairs (< {min_volume/1e9:.1f}B KRW/24h)")
+                except Exception as e:
+                    logger.warning(f"Could not filter by volume: {e}")
+            
             logger.info(f"Using KRW market for optimization: {len(pairs)} pairs")
         elif self.exchange_type == ExchangeType.BITHUMB:
             # Bithumb: KRW market only
@@ -269,12 +286,18 @@ class PortfolioWorker:
         now = datetime.utcnow()
         
         # Check if optimization is needed
-        # Run on Monday after 1:00 UTC, or if never run
-        should_run = (
-            self.last_optimization is None or
-            (now.weekday() == 0 and now.hour >= 1 and
-             (now - self.last_optimization).days >= 6)
-        )
+        reoptimize_hours = settings.portfolio_reoptimize_hours
+        
+        if reoptimize_hours <= 0:
+            # Disabled - only run once at startup
+            should_run = self.last_optimization is None
+        else:
+            # Run on schedule based on portfolio_reoptimize_hours
+            hours_since_last = (
+                (now - self.last_optimization).total_seconds() / 3600 
+                if self.last_optimization else float('inf')
+            )
+            should_run = hours_since_last >= reoptimize_hours
         
         if not should_run:
             return False

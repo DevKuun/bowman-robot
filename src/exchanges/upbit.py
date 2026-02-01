@@ -687,7 +687,7 @@ class UpbitExchange(BaseExchange):
         return orders
     
     def get_all_tickers(self) -> Dict[str, PriceData]:
-        """Get current prices for all trading pairs."""
+        """Get current prices and 24h volume for all trading pairs."""
         pairs = self.get_trading_pairs()
         symbols = [p.symbol for p in pairs]
         
@@ -700,10 +700,13 @@ class UpbitExchange(BaseExchange):
         result = {}
         for ticker in tickers:
             symbol = ticker['market']
+            # acc_trade_price_24h is 24h trading volume in quote currency (KRW/BTC/USDT)
+            volume_24h = Decimal(str(ticker.get('acc_trade_price_24h', 0)))
             result[symbol] = PriceData(
                 symbol=symbol,
                 price=Decimal(str(ticker['trade_price'])),
-                timestamp=datetime.fromtimestamp(ticker['timestamp'] / 1000)
+                timestamp=datetime.fromtimestamp(ticker['timestamp'] / 1000),
+                volume_24h=volume_24h
             )
         
         return result
