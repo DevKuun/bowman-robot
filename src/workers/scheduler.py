@@ -547,31 +547,47 @@ class PaperTradingScheduler:
         
         for currency, bal in balance.balances.items():
             if currency == quote_currency:
+                # Primary quote currency (KRW)
                 current_values[currency] = bal.available
                 total_value += bal.available
+            elif currency in ['USDT', 'BTC'] and self.exchange_type == ExchangeType.UPBIT:
+                # Secondary quote currencies - convert to KRW using cross rates
+                if currency in self._cross_rates and self._cross_rates[currency] > 0:
+                    value_in_krw = bal.available * self._cross_rates[currency]
+                    current_values[currency] = value_in_krw
+                    total_value += value_in_krw
             else:
-                # Find price - try multiple markets for Upbit
+                # Coins - find price and convert to KRW
                 symbol = None
                 price = None
+                price_in_krw = None
                 
                 if self.exchange_type == ExchangeType.UPBIT:
-                    # Try markets in priority order
+                    # Try markets in priority order, convert to KRW
                     for market in ['KRW', 'USDT', 'BTC']:
                         if market in settings.upbit_markets:
                             test_symbol = f"{market}-{currency}"
                             if test_symbol in prices:
                                 symbol = test_symbol
                                 price = prices[test_symbol]
-                                break
+                                # Convert to KRW for portfolio valuation
+                                if market == 'KRW':
+                                    price_in_krw = price
+                                elif market in self._cross_rates and self._cross_rates[market] > 0:
+                                    price_in_krw = price * self._cross_rates[market]
+                                if price_in_krw:
+                                    break
                 elif self.exchange_type == ExchangeType.BITHUMB:
                     symbol = f"{currency}_KRW"
                     price = prices.get(symbol)
+                    price_in_krw = price
                 else:
                     symbol = f"{currency}USDT"
                     price = prices.get(symbol)
+                    price_in_krw = price  # USDT is quote for Binance
                 
-                if price:
-                    value = bal.available * price
+                if price_in_krw:
+                    value = bal.available * price_in_krw
                     current_values[currency] = value
                     total_value += value
         
@@ -657,28 +673,35 @@ class PaperTradingScheduler:
             quantity = trade_value / price_in_krw
             
             # Minimum trade check using settings
-            # Determine market from symbol
+            # Convert all min_trade values to KRW for consistent comparison
+            # (trade_value is always in KRW)
             if self.exchange_type == ExchangeType.UPBIT and symbol:
                 if symbol.startswith('KRW-'):
-                    min_trade = Decimal(str(settings.upbit_min_trade_krw))
+                    min_trade_krw = Decimal(str(settings.upbit_min_trade_krw))  # Already KRW
                 elif symbol.startswith('BTC-'):
-                    min_trade = Decimal(str(settings.upbit_min_trade_btc))
+                    # Convert BTC minimum to KRW
+                    min_trade_btc = Decimal(str(settings.upbit_min_trade_btc))
+                    btc_rate = self._cross_rates.get('BTC', Decimal('150000000'))
+                    min_trade_krw = min_trade_btc * btc_rate
                 elif symbol.startswith('USDT-'):
-                    min_trade = Decimal(str(settings.upbit_min_trade_usdt))
+                    # Convert USDT minimum to KRW
+                    min_trade_usdt = Decimal(str(settings.upbit_min_trade_usdt))
+                    usdt_rate = self._cross_rates.get('USDT', Decimal('1400'))
+                    min_trade_krw = min_trade_usdt * usdt_rate
                 else:
-                    min_trade = Decimal(str(settings.upbit_min_trade_krw))
+                    min_trade_krw = Decimal(str(settings.upbit_min_trade_krw))
             elif quote_currency == 'KRW':
                 if self.exchange_type == ExchangeType.BITHUMB:
-                    min_trade = Decimal(str(settings.bithumb_min_trade_krw))
+                    min_trade_krw = Decimal(str(settings.bithumb_min_trade_krw))
                 elif self.exchange_type == ExchangeType.KORBIT:
-                    min_trade = Decimal(str(settings.korbit_min_trade_krw))
+                    min_trade_krw = Decimal(str(settings.korbit_min_trade_krw))
                 else:
-                    min_trade = Decimal('5000')  # Default for KRW
+                    min_trade_krw = Decimal('5000')  # Default for KRW
             else:
-                # USDT (Binance)
-                min_trade = Decimal(str(settings.binance_min_trade_usdt))
+                # USDT (Binance) - keep as is since trade_value is in USDT
+                min_trade_krw = Decimal(str(settings.binance_min_trade_usdt))
             
-            if trade_value < min_trade:
+            if trade_value < min_trade_krw:
                 continue
             
             # Determine side and check available balance
@@ -702,7 +725,7 @@ class PaperTradingScheduler:
                             price_in_krw = price
                             selected_market = 'KRW'
                             available_quote = balance.balances.get('KRW')
-                            min_trade = Decimal(str(settings.upbit_min_trade_krw))
+                            min_trade_krw = Decimal(str(settings.upbit_min_trade_krw))
                     
                     if not available_quote or available_quote.available <= 0:
                         continue
@@ -724,7 +747,7 @@ class PaperTradingScheduler:
                 if trade_value > max_buy_value:
                     trade_value = max_buy_value
                     quantity = trade_value / price_in_krw
-                if trade_value < min_trade:
+                if trade_value < min_trade_krw:
                     continue
             else:
                 side = OrderSide.SELL
@@ -734,7 +757,7 @@ class PaperTradingScheduler:
                     if quantity > available_coin.available:
                         quantity = available_coin.available * Decimal('0.95')
                         trade_value = quantity * price_in_krw
-                    if trade_value < min_trade:
+                    if trade_value < min_trade_krw:
                         continue
                 else:
                     continue
@@ -745,10 +768,14 @@ class PaperTradingScheduler:
                 'side': side,
                 'quantity': quantity,
                 'price': price,
-                'min_trade': min_trade,
+                'min_trade_krw': min_trade_krw,
                 'original_trade_value': trade_value  # Store original value for slippage check
             })
             symbols_to_trade.append(symbol)
+        
+        # Sort trades: SELL first, then BUY
+        # This ensures we have funds from sales before making purchases
+        trades_to_execute.sort(key=lambda t: (0 if t['side'] == OrderSide.SELL else 1))
         
         # Log rebalancing summary
         if trades_to_execute:
@@ -772,7 +799,7 @@ class PaperTradingScheduler:
             symbol = trade['symbol']
             side = trade['side']
             quantity = trade['quantity']
-            min_trade = trade['min_trade']
+            min_trade_krw = trade['min_trade_krw']
             
             if self.realistic_execution and symbol in order_books:
                 # Use realistic execution with order book
@@ -794,7 +821,15 @@ class PaperTradingScheduler:
             
             # Post-execution minimum trade check
             if order and order.filled_quantity > 0 and order.price:
+                # Convert filled_value to KRW for comparison
                 filled_value = order.filled_quantity * order.price
+                if symbol.startswith('BTC-') and 'BTC' in self._cross_rates:
+                    filled_value_krw = filled_value * self._cross_rates['BTC']
+                elif symbol.startswith('USDT-') and 'USDT' in self._cross_rates:
+                    filled_value_krw = filled_value * self._cross_rates['USDT']
+                else:
+                    filled_value_krw = filled_value
+                
                 original_value = trade['original_trade_value']
                 
                 if self.paper_account.trades:
@@ -802,7 +837,7 @@ class PaperTradingScheduler:
                     # Store original value in the trade
                     last_trade.original_value = original_value
                     
-                    if filled_value < min_trade:
+                    if filled_value_krw < min_trade_krw:
                         # Mark the last trade as below minimum
                         last_trade.below_minimum = True
                         
@@ -810,18 +845,18 @@ class PaperTradingScheduler:
                         # 1. Original value was >= min_trade
                         # 2. Actual slippage occurred (slippage_percent > 0)
                         actual_slippage = last_trade.slippage_percent > 0
-                        was_above_min = original_value >= min_trade
+                        was_above_min = original_value >= min_trade_krw
                         
                         if was_above_min and actual_slippage:
                             last_trade.slippage_reduced = True
                             logger.warning(
                                 f"Trade below minimum (slippage {last_trade.slippage_percent:.2f}%): {symbol} {side.value} "
-                                f"original={original_value:.0f} -> filled={filled_value:.0f} < min={min_trade:.0f}"
+                                f"original={original_value:.0f} -> filled={filled_value_krw:.0f} < min={min_trade_krw:.0f}"
                             )
                         else:
                             logger.warning(
                                 f"Trade below minimum: {symbol} {side.value} "
-                                f"filled={filled_value:.0f} < min={min_trade:.0f}"
+                                f"filled={filled_value_krw:.0f} < min={min_trade_krw:.0f}"
                             )
         
         # Take snapshot periodically
