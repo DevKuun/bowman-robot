@@ -145,7 +145,18 @@ class UpbitExchange(BaseExchange):
         krw_usdt_ob = order_books.get('KRW-USDT')
         krw_btc_ob = order_books.get('KRW-BTC')
         
+        # Quote currencies that can only be traded against KRW
+        quote_only_currencies = {'BTC', 'USDT'}
+        
         for market in settings.upbit_markets:
+            # Skip invalid markets:
+            # 1. Same currency (BTC-BTC, USDT-USDT)
+            # 2. Quote currency as base in non-KRW market (BTC-USDT, USDT-BTC)
+            if market == base_currency:
+                continue
+            if base_currency in quote_only_currencies and market != 'KRW':
+                continue
+            
             symbol = f"{market}-{base_currency}"
             
             if symbol not in prices:

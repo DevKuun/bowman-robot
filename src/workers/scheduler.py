@@ -611,10 +611,20 @@ class PaperTradingScheduler:
                 symbols_for_ob.add('KRW-USDT')
                 symbols_for_ob.add('KRW-BTC')
                 
+                # Quote currencies (cannot be base currency in their own market)
+                quote_currencies = {'KRW', 'BTC', 'USDT'}
+                
                 for currency, target_weight in self.target_weights.items():
                     current_weight = current_weights.get(currency, Decimal('0'))
                     if abs(Decimal(str(target_weight)) - current_weight) >= th_trd_rate:
                         for market in settings.upbit_markets:
+                            # Skip invalid markets:
+                            # 1. Same currency (BTC-BTC, USDT-USDT)
+                            # 2. Quote currency as base in non-KRW market (BTC-USDT, USDT-BTC)
+                            if market == currency:
+                                continue
+                            if currency in quote_currencies and market != 'KRW':
+                                continue
                             symbols_for_ob.add(f"{market}-{currency}")
                 
                 # Fetch order books with more levels for accurate slippage estimation
@@ -1063,10 +1073,48 @@ class PaperTradingScheduler:
                             )
         
         # Auto-convert USDT/BTC to KRW after trades (if enabled)
+        # BUT: Skip if BTC/USDT is a target asset in the portfolio
         if self.exchange_type == ExchangeType.UPBIT and settings.upbit_auto_convert_to_krw:
             updated_balance = self.paper_exchange.get_account_balance()
             
             for quote_currency in ['USDT', 'BTC']:
+                # Skip if this currency is a target asset in the portfolio
+                if quote_currency in self.target_weights:
+                    target_weight = Decimal(str(self.target_weights[quote_currency]))
+                    if target_weight > Decimal('0.001'):  # Has meaningful weight
+                        # Calculate how much to keep based on target weight
+                        target_value = total_value * target_weight
+                        if quote_currency in self._cross_rates:
+                            target_quantity = target_value / self._cross_rates[quote_currency]
+                            quote_bal = updated_balance.balances.get(quote_currency)
+                            if quote_bal:
+                                # Only convert EXCESS beyond target
+                                excess = quote_bal.available - target_quantity
+                                if excess > Decimal('0.0001'):
+                                    convert_quantity = excess
+                                    convert_symbol = f"KRW-{quote_currency}"
+                                    value_in_krw = convert_quantity * self._cross_rates[quote_currency]
+                                    if value_in_krw >= Decimal('5000'):
+                                        logger.info(f"[Auto-Convert] Selling excess {convert_quantity:.4f} {quote_currency} to KRW (keeping {target_quantity:.4f})")
+                                        if self.realistic_execution and convert_symbol in order_books:
+                                            self.paper_exchange.place_order_realistic(
+                                                symbol=convert_symbol,
+                                                side=OrderSide.SELL,
+                                                quantity=convert_quantity,
+                                                order_book=order_books[convert_symbol]
+                                            )
+                                        else:
+                                            convert_price = prices.get(convert_symbol, Decimal('0'))
+                                            if convert_price > 0:
+                                                self.paper_exchange.place_order(
+                                                    symbol=convert_symbol,
+                                                    side=OrderSide.SELL,
+                                                    order_type=OrderType.LIMIT,
+                                                    quantity=convert_quantity,
+                                                    price=convert_price
+                                                )
+                        continue  # Skip full conversion for target assets
+                
                 quote_bal = updated_balance.balances.get(quote_currency)
                 if quote_bal and quote_bal.available > Decimal('0.0001'):
                     convert_symbol = f"KRW-{quote_currency}"
