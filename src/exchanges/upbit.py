@@ -514,11 +514,26 @@ class UpbitExchange(BaseExchange):
     
     def get_order_books(self, symbols: List[str], levels: int = 5) -> Dict[str, OrderBook]:
         """Get order books for multiple trading pairs."""
-        orderbooks = self._request(
-            'GET', '/orderbook',
-            params={'markets': ','.join(symbols)},
-            auth=False
-        )
+        # Filter to only valid markets (Upbit API fails if ANY invalid market is included)
+        valid_symbols = self._filter_valid_symbols(symbols)
+        
+        if not valid_symbols:
+            logger.warning(f"No valid symbols to fetch order books from {len(symbols)} requested")
+            return {}
+        
+        if len(valid_symbols) < len(symbols):
+            invalid = set(symbols) - set(valid_symbols)
+            logger.debug(f"Filtered out {len(invalid)} invalid symbols: {list(invalid)[:5]}...")
+        
+        try:
+            orderbooks = self._request(
+                'GET', '/orderbook',
+                params={'markets': ','.join(valid_symbols)},
+                auth=False
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch order books: {e}")
+            return {}
         
         result = {}
         for ob in orderbooks:
@@ -549,6 +564,23 @@ class UpbitExchange(BaseExchange):
             )
         
         return result
+    
+    def _filter_valid_symbols(self, symbols: List[str]) -> List[str]:
+        """Filter symbols to only those that exist on Upbit."""
+        if not hasattr(self, '_valid_symbols_cache') or self._valid_symbols_cache is None:
+            self._refresh_valid_symbols()
+        
+        return [s for s in symbols if s in self._valid_symbols_cache]
+    
+    def _refresh_valid_symbols(self):
+        """Refresh the cache of valid market symbols."""
+        try:
+            trading_pairs = self.get_trading_pairs()
+            self._valid_symbols_cache = {pair.symbol for pair in trading_pairs}
+            logger.info(f"Cached {len(self._valid_symbols_cache)} valid Upbit market symbols")
+        except Exception as e:
+            logger.error(f"Failed to refresh valid symbols: {e}")
+            self._valid_symbols_cache = set()
     
     def place_order(
         self,
