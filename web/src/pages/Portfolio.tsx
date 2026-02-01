@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Wallet, TrendingUp, TrendingDown, PieChart as PieChartIcon, BarChart3, Target, ChevronDown, ChevronUp } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, PieChart as PieChartIcon, BarChart3, Target, ChevronDown, ChevronUp, RefreshCw, Clock, Settings } from 'lucide-react';
 import { portfolioApi, botApi } from '../api/client';
 import { PortfolioTable } from '../components/PortfolioTable';
 import { PortfolioPieChart } from '../components/PortfolioPieChart';
@@ -51,6 +51,13 @@ export function Portfolio() {
     queryKey: ['target-weights', effectiveRiskLevel],
     queryFn: () => botApi.getWeights(statusQuery.data?.exchange || 'bithumb', effectiveRiskLevel),
     enabled: true,
+  });
+
+  // Get optimization status
+  const optimizationStatusQuery = useQuery({
+    queryKey: ['optimization-status'],
+    queryFn: portfolioApi.getOptimizationStatus,
+    refetchInterval: 60000, // Refresh every minute
   });
 
   // Use real-time data if available
@@ -281,6 +288,100 @@ export function Portfolio() {
           )}
         </div>
       </div>
+
+      {/* Portfolio Optimization Status */}
+      {optimizationStatusQuery.data && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Settings className="w-5 h-5 text-blue-600" />
+              <h3 className="text-lg font-semibold text-gray-800">포트폴리오 최적화</h3>
+            </div>
+            {optimizationStatusQuery.isRefetching && (
+              <RefreshCw className="w-4 h-4 text-gray-400 animate-spin" />
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Last Optimization */}
+            <div className="p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <Clock className="w-4 h-4 text-gray-500" />
+                <span className="text-sm font-medium text-gray-600">마지막 최적화</span>
+              </div>
+              {optimizationStatusQuery.data.last_optimization ? (
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">
+                    {formatDateTimeKST(optimizationStatusQuery.data.last_optimization)}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {Math.round((new Date().getTime() - new Date(optimizationStatusQuery.data.last_optimization).getTime()) / (1000 * 60 * 60))}시간 전
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400">아직 실행되지 않음</p>
+              )}
+            </div>
+
+            {/* Next Optimization */}
+            <div className="p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <RefreshCw className="w-4 h-4 text-gray-500" />
+                <span className="text-sm font-medium text-gray-600">다음 최적화</span>
+              </div>
+              {optimizationStatusQuery.data.schedule.enabled ? (
+                optimizationStatusQuery.data.next_optimization ? (
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">
+                      {formatDateTimeKST(optimizationStatusQuery.data.next_optimization)}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      {optimizationStatusQuery.data.schedule.reoptimize_hours}시간마다 자동 실행
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400">예정 없음</p>
+                )
+              ) : (
+                <p className="text-sm text-gray-400">자동 갱신 비활성화</p>
+              )}
+            </div>
+
+            {/* Settings */}
+            <div className="p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <Settings className="w-4 h-4 text-gray-500" />
+                <span className="text-sm font-medium text-gray-600">설정</span>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-gray-600">
+                  최소 거래량: {formatNumber(optimizationStatusQuery.data.schedule.min_daily_volume_krw / 1e9, { maximumFractionDigits: 1 })}B KRW
+                </p>
+                <p className="text-xs text-gray-600">
+                  갱신 주기: {optimizationStatusQuery.data.schedule.enabled 
+                    ? `${optimizationStatusQuery.data.schedule.reoptimize_hours}시간`
+                    : '수동'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Optimization History */}
+          {optimizationStatusQuery.data.history.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <h4 className="text-sm font-medium text-gray-700 mb-2">최근 최적화 이력</h4>
+              <div className="space-y-1.5">
+                {optimizationStatusQuery.data.history.map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-xs text-gray-600 py-1">
+                    <span>{formatDateTimeKST(item.timestamp)}</span>
+                    <span className="text-gray-400">{item.risk_levels}개 리스크 레벨</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Target Portfolio Weights */}
       {targetWeights?.exists && targetWeights?.weights && (

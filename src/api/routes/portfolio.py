@@ -1,12 +1,15 @@
 """
 Portfolio API routes.
 """
+import logging
 from datetime import datetime
 from fastapi import APIRouter
 from typing import List, Optional
 
 from src.api.state import app_state
 from src.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -174,4 +177,91 @@ async def get_portfolio_summary():
         "asset_count": len(portfolio["holdings"]),
         "total_trades": status["total_trades"],
         "total_fees": status["total_fees"]
+    }
+
+
+@router.get("/optimization/status")
+async def get_optimization_status():
+    """
+    Get portfolio optimization status and history.
+    
+    Returns:
+    - Last optimization time
+    - Next scheduled optimization time
+    - Optimization schedule settings
+    - Recent optimization history
+    """
+    from src.infrastructure.database.connection import db_manager
+    from src.infrastructure.database.repositories import PortfolioWeightRepository
+    
+    # Get portfolio worker from scheduler in app_state
+    scheduler = app_state.scheduler
+    portfolio_worker = scheduler.portfolio_worker if scheduler else None
+    
+    # Get optimization settings
+    reoptimize_hours = settings.portfolio_reoptimize_hours
+    min_volume = settings.portfolio_min_daily_volume_krw
+    
+    # Get last optimization time from worker
+    last_optimization = None
+    next_optimization = None
+    if portfolio_worker and portfolio_worker.last_optimization:
+        last_optimization = portfolio_worker.last_optimization.isoformat()
+        if reoptimize_hours > 0:
+            from datetime import timedelta
+            next_optimization = (portfolio_worker.last_optimization + timedelta(hours=reoptimize_hours)).isoformat()
+    
+    # Get latest weights from database
+    exchange = status.get("exchange") if (status := app_state.get_status()) else None
+    if not exchange:
+        # Default to UPBIT if no bot is running
+        exchange = "UPBIT"
+    
+    latest_weights = {}
+    optimization_history = []
+    
+    try:
+        with db_manager.session_scope() as session:
+            repo = PortfolioWeightRepository(session)
+            
+            # Get latest weights for all risk levels
+            all_latest = repo.get_all_latest(exchange)
+            for risk_level, weight_obj in all_latest.items():
+                latest_weights[risk_level] = {
+                    "created_at": weight_obj.created_at.isoformat(),
+                    "asset_count": len(weight_obj.weights)
+                }
+            
+            # Get recent optimization history (last 10)
+            from sqlalchemy import desc
+            from src.infrastructure.database.models import PortfolioWeight
+            
+            recent = session.query(PortfolioWeight).filter(
+                PortfolioWeight.exchange == exchange.upper()
+            ).order_by(desc(PortfolioWeight.created_at)).limit(10).all()
+            
+            # Group by created_at to get unique optimization runs
+            seen_times = set()
+            for weight in recent:
+                if weight.created_at not in seen_times:
+                    seen_times.add(weight.created_at)
+                    optimization_history.append({
+                        "timestamp": weight.created_at.isoformat(),
+                        "risk_levels": len([w for w in recent if w.created_at == weight.created_at])
+                    })
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to fetch optimization history: {e}")
+    
+    return {
+        "last_optimization": last_optimization,
+        "next_optimization": next_optimization,
+        "schedule": {
+            "reoptimize_hours": reoptimize_hours,
+            "enabled": reoptimize_hours > 0,
+            "min_daily_volume_krw": min_volume
+        },
+        "latest_weights": latest_weights,
+        "history": optimization_history[:5],  # Last 5 optimizations
+        "exchange": exchange
     }

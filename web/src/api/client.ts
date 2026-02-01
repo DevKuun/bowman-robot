@@ -68,6 +68,20 @@ export const portfolioApi = {
     api.get<PortfolioSummary>('/api/portfolio/summary').then(r => r.data),
   
   getWeights: () => api.get('/api/portfolio/weights').then(r => r.data),
+  
+  getOptimizationStatus: () => 
+    api.get<{
+      last_optimization: string | null;
+      next_optimization: string | null;
+      schedule: {
+        reoptimize_hours: number;
+        enabled: boolean;
+        min_daily_volume_krw: number;
+      };
+      latest_weights: Record<number, { created_at: string; asset_count: number }>;
+      history: Array<{ timestamp: string; risk_levels: number }>;
+      exchange: string;
+    }>('/api/portfolio/optimization/status').then(r => r.data),
 };
 
 // Trades API
