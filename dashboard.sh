@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Bowman Robot Dashboard Control Script
-# Usage: ./dashboard.sh [start|stop|status|restart]
+# Usage: ./dashboard.sh [start|stop|status|restart|update|logs]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="$SCRIPT_DIR/.dashboard.pid"
@@ -12,16 +12,10 @@ PORT="${DASHBOARD_PORT:-8002}"
 mkdir -p "$SCRIPT_DIR/logs"
 
 start() {
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null 2>&1; then
-            echo "Dashboard is already running (PID: $PID)"
-            echo "Access: http://localhost:$PORT"
-            return 1
-        else
-            rm -f "$PID_FILE"
-        fi
-    fi
+    # Kill any existing process
+    sudo pkill -9 -f "src.api.run" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    sleep 1
 
     echo "Starting Bowman Dashboard API server..."
     cd "$SCRIPT_DIR"
@@ -39,82 +33,44 @@ start() {
     fi
     
     # Start API server in background
-    nohup python3 -m src.api.run --port "$PORT" > "$LOG_FILE" 2>&1 &
+    nohup sudo "$SCRIPT_DIR/venv/bin/python3" -m src.api.run --port "$PORT" > "$LOG_FILE" 2>&1 &
     PID=$!
     echo $PID > "$PID_FILE"
     
     # Wait a moment and check if it started
     sleep 2
-    if ps -p "$PID" > /dev/null 2>&1; then
+    
+    # Check health
+    result=$(curl -s "http://localhost:$PORT/api/health" 2>/dev/null || echo "")
+    if [[ "$result" == *"healthy"* ]]; then
         echo "✓ Dashboard started successfully!"
         echo ""
         echo "  URL: http://localhost:$PORT"
-        echo "  PID: $PID"
         echo "  Log: $LOG_FILE"
         echo ""
-        echo "Use './dashboard.sh stop' to stop the server."
     else
         echo "✗ Failed to start dashboard. Check logs:"
-        echo "  $LOG_FILE"
-        rm -f "$PID_FILE"
+        tail -20 "$LOG_FILE"
         return 1
     fi
 }
 
 stop() {
-    if [ ! -f "$PID_FILE" ]; then
-        echo "Dashboard is not running (no PID file)"
-        return 1
-    fi
-
-    PID=$(cat "$PID_FILE")
-    if ps -p "$PID" > /dev/null 2>&1; then
-        echo "Stopping Dashboard (PID: $PID)..."
-        kill "$PID"
-        
-        # Wait for process to stop
-        for i in {1..10}; do
-            if ! ps -p "$PID" > /dev/null 2>&1; then
-                break
-            fi
-            sleep 0.5
-        done
-        
-        # Force kill if still running
-        if ps -p "$PID" > /dev/null 2>&1; then
-            echo "Force killing..."
-            kill -9 "$PID"
-        fi
-        
-        rm -f "$PID_FILE"
-        echo "✓ Dashboard stopped"
-    else
-        echo "Dashboard is not running (process not found)"
-        rm -f "$PID_FILE"
-    fi
+    echo "Stopping Dashboard..."
+    sudo pkill -9 -f "src.api.run" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    sleep 1
+    echo "✓ Dashboard stopped"
 }
 
 status() {
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null 2>&1; then
-            echo "✓ Dashboard is running"
-            echo "  PID:  $PID"
-            echo "  URL:  http://localhost:$PORT"
-            echo "  Log:  $LOG_FILE"
-            
-            # Check if API is responding
-            if command -v curl &> /dev/null; then
-                if curl -s "http://localhost:$PORT/api/health" > /dev/null 2>&1; then
-                    echo "  API:  Healthy"
-                else
-                    echo "  API:  Not responding (may be starting up)"
-                fi
-            fi
-        else
-            echo "✗ Dashboard is not running (stale PID file)"
-            rm -f "$PID_FILE"
-        fi
+    result=$(curl -s "http://localhost:$PORT/api/health" 2>/dev/null || echo "")
+    
+    if [[ "$result" == *"healthy"* ]]; then
+        echo "✓ Dashboard is running"
+        echo "  URL: http://localhost:$PORT"
+        echo "  API: Healthy"
+        echo "$result" | python3 -m json.tool 2>/dev/null || echo "$result"
     else
         echo "✗ Dashboard is not running"
     fi
@@ -122,13 +78,26 @@ status() {
 
 restart() {
     stop
-    sleep 1
     start
 }
 
+update() {
+    echo "Pulling latest code..."
+    cd "$SCRIPT_DIR"
+    git pull
+    
+    echo ""
+    restart
+}
+
 logs() {
+    lines="${2:-50}"
     if [ -f "$LOG_FILE" ]; then
-        tail -f "$LOG_FILE"
+        if [ "$1" == "-f" ]; then
+            tail -f "$LOG_FILE"
+        else
+            tail -n "$lines" "$LOG_FILE"
+        fi
     else
         echo "No log file found: $LOG_FILE"
     fi
@@ -147,26 +116,27 @@ case "$1" in
     restart)
         restart
         ;;
+    update)
+        update
+        ;;
     logs)
-        logs
+        logs "$2" "$3"
         ;;
     *)
         echo "Bowman Robot Dashboard Control"
         echo ""
-        echo "Usage: $0 {start|stop|status|restart|logs}"
+        echo "Usage: $0 {start|stop|status|restart|update|logs}"
         echo ""
         echo "Commands:"
         echo "  start   - Start the dashboard API server"
         echo "  stop    - Stop the dashboard API server"
         echo "  status  - Check if dashboard is running"
         echo "  restart - Restart the dashboard"
-        echo "  logs    - View dashboard logs (tail -f)"
+        echo "  update  - Git pull and restart"
+        echo "  logs    - Show last 50 lines of logs"
+        echo "  logs -f - Tail logs in real-time"
         echo ""
         echo "Environment:"
         echo "  DASHBOARD_PORT - Port number (default: 8002)"
-        echo ""
-        echo "Example:"
-        echo "  ./dashboard.sh start"
-        echo "  DASHBOARD_PORT=8080 ./dashboard.sh start"
         ;;
 esac
