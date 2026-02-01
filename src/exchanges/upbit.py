@@ -238,37 +238,44 @@ class UpbitExchange(BaseExchange):
                         # 1-step: BTC/USDT → Coin (already have quote currency)
                         effective_price = price_in_krw * (1 + fee_rate)
                     else:
-                        # 2-step: KRW → BTC/USDT (fee + spread) → Coin (fee + spread)
-                        # Calculate spread cost for step 1 (buying USDT/BTC with KRW)
-                        step1_spread = Decimal('0')
-                        if market == 'USDT' and krw_usdt_ob and krw_usdt_ob.spread:
-                            # Spread as percentage of mid price
-                            if krw_usdt_ob.mid_price and krw_usdt_ob.mid_price > 0:
-                                step1_spread = krw_usdt_ob.spread / krw_usdt_ob.mid_price / 2
-                        elif market == 'BTC' and krw_btc_ob and krw_btc_ob.spread:
-                            if krw_btc_ob.mid_price and krw_btc_ob.mid_price > 0:
-                                step1_spread = krw_btc_ob.spread / krw_btc_ob.mid_price / 2
+                        # 2-step: KRW → BTC/USDT (fee + slippage) → Coin (fee + slippage)
+                        # Calculate step 1 slippage (buying USDT/BTC with KRW)
+                        step1_slippage = Decimal('0')
+                        step1_ob = krw_usdt_ob if market == 'USDT' else krw_btc_ob
+                        if step1_ob and trade_quantity and trade_quantity > 0:
+                            # Estimate how much USDT/BTC we need to buy
+                            step1_qty = trade_quantity * price  # Coin qty * price in USDT/BTC
+                            step1_slip = step1_ob.estimate_slippage('buy', step1_qty)
+                            if step1_slip:
+                                step1_slippage = step1_slip
+                        elif step1_ob and step1_ob.spread and step1_ob.mid_price and step1_ob.mid_price > 0:
+                            # Fallback: use spread as slippage estimate
+                            step1_slippage = step1_ob.spread / step1_ob.mid_price / 2
                         
-                        # Step 2 spread is already reflected in using ask price
-                        effective_price = price_in_krw * (1 + krw_fee_rate + step1_spread) * (1 + fee_rate)
+                        # Step 2 slippage is already reflected in price from estimate_fill_price
+                        effective_price = price_in_krw * (1 + krw_fee_rate + step1_slippage) * (1 + fee_rate)
             else:  # sell
                 if market == 'KRW':
                     # Direct: Coin → KRW (1 fee, bid price already used)
                     effective_price = price_in_krw * (1 - fee_rate)
                 else:
                     # Sell always assumes 2-step (conservative: will convert to KRW eventually)
-                    # Coin → BTC/USDT (fee + spread) → KRW (fee + spread)
-                    # Calculate spread cost for step 2 (selling USDT/BTC for KRW)
-                    step2_spread = Decimal('0')
-                    if market == 'USDT' and krw_usdt_ob and krw_usdt_ob.spread:
-                        if krw_usdt_ob.mid_price and krw_usdt_ob.mid_price > 0:
-                            step2_spread = krw_usdt_ob.spread / krw_usdt_ob.mid_price / 2
-                    elif market == 'BTC' and krw_btc_ob and krw_btc_ob.spread:
-                        if krw_btc_ob.mid_price and krw_btc_ob.mid_price > 0:
-                            step2_spread = krw_btc_ob.spread / krw_btc_ob.mid_price / 2
+                    # Coin → BTC/USDT (fee + slippage) → KRW (fee + slippage)
+                    # Calculate step 2 slippage (selling USDT/BTC for KRW)
+                    step2_slippage = Decimal('0')
+                    step2_ob = krw_usdt_ob if market == 'USDT' else krw_btc_ob
+                    if step2_ob and trade_quantity and trade_quantity > 0:
+                        # Estimate how much USDT/BTC we'll receive from step 1
+                        step2_qty = trade_quantity * price  # Coin qty * price in USDT/BTC
+                        step2_slip = step2_ob.estimate_slippage('sell', step2_qty)
+                        if step2_slip:
+                            step2_slippage = step2_slip
+                    elif step2_ob and step2_ob.spread and step2_ob.mid_price and step2_ob.mid_price > 0:
+                        # Fallback: use spread as slippage estimate
+                        step2_slippage = step2_ob.spread / step2_ob.mid_price / 2
                     
-                    # Step 1 spread is already reflected in using bid price
-                    effective_price = price_in_krw * (1 - fee_rate) * (1 - krw_fee_rate - step2_spread)
+                    # Step 1 slippage is already reflected in price from estimate_fill_price
+                    effective_price = price_in_krw * (1 - fee_rate) * (1 - krw_fee_rate - step2_slippage)
             
             # Compare and find best
             if best_effective_price is None:

@@ -562,11 +562,25 @@ class PaperTradingAccount:
         # Log with slippage info
         slippage_str = f", slippage: {result.slippage_percent:.2f}%" if result.slippage_percent != 0 else ""
         partial_str = " [PARTIAL]" if partially_filled else ""
+        
+        # Format price based on quote currency
+        if quote_currency == 'BTC':
+            price_fmt = f"avg {result.avg_price:.8f} (best: {result.best_price:.8f})"
+            cost_fmt = f"{result.total_cost:.8f}"
+            fee_fmt = f"{result.fee:.8f}"
+        elif quote_currency == 'USDT':
+            price_fmt = f"avg {result.avg_price:.4f} (best: {result.best_price:.4f})"
+            cost_fmt = f"{result.total_cost:.2f}"
+            fee_fmt = f"{result.fee:.4f}"
+        else:  # KRW
+            price_fmt = f"avg {result.avg_price:.2f} (best: {result.best_price:.2f})"
+            cost_fmt = f"{result.total_cost:.0f}"
+            fee_fmt = f"{result.fee:.2f}"
+        
         logger.info(
             f"[PAPER] {side.value} {result.filled_quantity:.8f} {base_currency} "
-            f"@ avg {result.avg_price:.2f} (best: {result.best_price:.2f}) "
-            f"= {result.total_cost:.0f} {quote_currency} "
-            f"(fee: {result.fee:.2f}{slippage_str}){partial_str}"
+            f"@ {price_fmt} = {cost_fmt} {quote_currency} "
+            f"(fee: {fee_fmt}{slippage_str}){partial_str}"
         )
         
         return Order(
