@@ -846,6 +846,11 @@ class PaperTradingScheduler:
                 'two_step_trade': two_step_trade  # None or {step1_symbol, step1_quote, step2_symbol}
             })
             symbols_to_trade.append(symbol)
+            # Also add KRW market for fallback
+            if not symbol.startswith('KRW-'):
+                krw_fallback = f"KRW-{currency}"
+                if krw_fallback not in symbols_to_trade:
+                    symbols_to_trade.append(krw_fallback)
             if two_step_trade:
                 symbols_to_trade.append(two_step_trade['step1_symbol'])
         
@@ -861,12 +866,12 @@ class PaperTradingScheduler:
             ])
             logger.info(f"Rebalancing needed: {len(trades_to_execute)} trades - {trade_summary}")
         
-        # Fetch order books for realistic execution
+        # Fetch order books for realistic execution (including KRW fallbacks)
         order_books = {}
         if self.realistic_execution and symbols_to_trade:
             try:
-                # Fetch order books with 10 levels for accurate slippage calculation
-                order_books = self.paper_exchange.get_order_books(symbols_to_trade, levels=10)
+                # Fetch order books with 15 levels for accurate slippage calculation
+                order_books = self.paper_exchange.get_order_books(symbols_to_trade, levels=15)
             except Exception as e:
                 logger.warning(f"Failed to get order books for realistic execution: {e}")
         
@@ -884,49 +889,128 @@ class PaperTradingScheduler:
                 step1_quote = two_step['step1_quote']    # e.g., USDT
                 step2_symbol = two_step['step2_symbol']  # e.g., USDT-ETH
                 
-                # Step 1: Buy USDT/BTC with KRW
-                # Calculate how much USDT/BTC we need for step 2
-                step2_price = prices.get(step2_symbol, Decimal('0'))
-                if step2_price > 0:
-                    step1_quantity = quantity * step2_price * Decimal('1.01')  # 1% buffer for fees
-                    
-                    logger.info(f"[2-Step] Step 1: Buying {step1_quantity:.4f} {step1_quote}")
-                    
-                    if self.realistic_execution and step1_symbol in order_books:
-                        step1_order = self.paper_exchange.place_order_realistic(
-                            symbol=step1_symbol,
-                            side=OrderSide.BUY,
-                            quantity=step1_quantity,
-                            order_book=order_books[step1_symbol]
-                        )
+                # PRE-CHECK: Verify both steps have acceptable slippage
+                max_2step_slippage = Decimal('0.02')  # 2% per step for 2-step trades
+                skip_2step = False
+                
+                if self.realistic_execution:
+                    # Check step 1 (KRW → USDT/BTC)
+                    step2_price = prices.get(step2_symbol, Decimal('0'))
+                    if step2_price > 0:
+                        step1_quantity = quantity * step2_price * Decimal('1.01')
+                        
+                        if step1_symbol in order_books:
+                            step1_ob = order_books[step1_symbol]
+                            step1_slippage = step1_ob.estimate_slippage('buy', step1_quantity)
+                            if step1_slippage and step1_slippage > max_2step_slippage:
+                                logger.info(f"[2-Step] Step 1 slippage {step1_slippage*100:.2f}% > 2% - fallback to KRW direct")
+                                skip_2step = True
+                        
+                        # Check step 2 (USDT/BTC → Coin)
+                        if not skip_2step and step2_symbol in order_books:
+                            step2_ob = order_books[step2_symbol]
+                            step2_slippage = step2_ob.estimate_slippage('buy', quantity)
+                            if step2_slippage and step2_slippage > max_2step_slippage:
+                                logger.info(f"[2-Step] Step 2 slippage {step2_slippage*100:.2f}% > 2% - fallback to KRW direct")
+                                skip_2step = True
+                
+                if skip_2step:
+                    # Fallback to KRW market
+                    krw_symbol = f"KRW-{trade['currency']}"
+                    if krw_symbol in prices:
+                        symbol = krw_symbol
+                        trade['symbol'] = krw_symbol
+                        two_step = None  # Clear 2-step flag
+                        logger.info(f"[2-Step] Fallback to {krw_symbol}")
                     else:
-                        step1_price = prices.get(step1_symbol, Decimal('0'))
-                        step1_order = self.paper_exchange.place_order(
-                            symbol=step1_symbol,
-                            side=OrderSide.BUY,
-                            order_type=OrderType.LIMIT,
-                            quantity=step1_quantity,
-                            price=step1_price
-                        )
-                    
-                    if not step1_order or step1_order.filled_quantity <= 0:
-                        logger.warning(f"[2-Step] Step 1 failed for {trade['currency']}")
+                        logger.warning(f"[2-Step] No KRW fallback available for {trade['currency']} - skipping")
                         continue
-                    
-                    logger.info(f"[2-Step] Step 1 completed: {step1_order.filled_quantity:.4f} {step1_quote}")
-                    
-                    # Step 2: Buy Coin with USDT/BTC
-                    # Use the symbol from two_step (e.g., USDT-ETH)
-                    symbol = step2_symbol
-                    logger.info(f"[2-Step] Step 2: Buying {quantity:.8f} {trade['currency']}")
+                
+                # Execute 2-step if not skipped
+                if two_step:
+                    step2_price = prices.get(step2_symbol, Decimal('0'))
+                    if step2_price > 0:
+                        step1_quantity = quantity * step2_price * Decimal('1.01')  # 1% buffer for fees
+                        
+                        logger.info(f"[2-Step] Step 1: Buying {step1_quantity:.4f} {step1_quote}")
+                        
+                        if self.realistic_execution and step1_symbol in order_books:
+                            step1_order = self.paper_exchange.place_order_realistic(
+                                symbol=step1_symbol,
+                                side=OrderSide.BUY,
+                                quantity=step1_quantity,
+                                order_book=order_books[step1_symbol]
+                            )
+                        else:
+                            step1_price = prices.get(step1_symbol, Decimal('0'))
+                            step1_order = self.paper_exchange.place_order(
+                                symbol=step1_symbol,
+                                side=OrderSide.BUY,
+                                order_type=OrderType.LIMIT,
+                                quantity=step1_quantity,
+                                price=step1_price
+                            )
+                        
+                        if not step1_order or step1_order.filled_quantity <= 0:
+                            logger.warning(f"[2-Step] Step 1 failed for {trade['currency']} - fallback to KRW")
+                            krw_symbol = f"KRW-{trade['currency']}"
+                            if krw_symbol in prices:
+                                symbol = krw_symbol
+                                trade['symbol'] = krw_symbol
+                            else:
+                                continue
+                        else:
+                            logger.info(f"[2-Step] Step 1 completed: {step1_order.filled_quantity:.4f} {step1_quote}")
+                            
+                            # Step 2: Buy Coin with USDT/BTC
+                            symbol = step2_symbol
+                            logger.info(f"[2-Step] Step 2: Buying {quantity:.8f} {trade['currency']}")
             
             if self.realistic_execution and symbol in order_books:
+                ob = order_books[symbol]
+                side_str = 'buy' if side == OrderSide.BUY else 'sell'
+                
+                # PRE-EXECUTION LIQUIDITY/SLIPPAGE CHECK
+                max_exec_slippage = Decimal('0.03')  # 3% max
+                skip_trade = False
+                fallback_to_krw = False
+                
+                # Check liquidity
+                depth = ob.get_depth(side_str)
+                if depth < quantity * Decimal('0.3'):
+                    logger.warning(f"[Liquidity] {symbol}: Insufficient depth {depth:.6f} for {quantity:.6f} - skipping")
+                    skip_trade = True
+                
+                # Check slippage
+                if not skip_trade:
+                    estimated_slippage = ob.estimate_slippage(side_str, quantity)
+                    if estimated_slippage and estimated_slippage > max_exec_slippage:
+                        # Try KRW market instead if available
+                        krw_symbol = f"KRW-{trade['currency']}"
+                        if not symbol.startswith('KRW-') and krw_symbol in order_books:
+                            krw_ob = order_books[krw_symbol]
+                            krw_slippage = krw_ob.estimate_slippage(side_str, quantity)
+                            if krw_slippage is None or krw_slippage <= max_exec_slippage:
+                                logger.info(f"[Slippage] {symbol}: {estimated_slippage*100:.2f}% > 3% - fallback to {krw_symbol}")
+                                fallback_to_krw = True
+                                symbol = krw_symbol
+                                ob = krw_ob
+                            else:
+                                logger.warning(f"[Slippage] {symbol}: {estimated_slippage*100:.2f}% too high, KRW also high - skipping")
+                                skip_trade = True
+                        else:
+                            logger.warning(f"[Slippage] {symbol}: {estimated_slippage*100:.2f}% > 3% - skipping")
+                            skip_trade = True
+                
+                if skip_trade:
+                    continue
+                
                 # Use realistic execution with order book
                 order = self.paper_exchange.place_order_realistic(
                     symbol=symbol,
                     side=side,
                     quantity=quantity,
-                    order_book=order_books[symbol]
+                    order_book=ob
                 )
             else:
                 # Fallback to simple execution
